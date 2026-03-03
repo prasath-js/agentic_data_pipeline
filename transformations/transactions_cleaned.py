@@ -57,39 +57,27 @@ def main():
     else:
         print("No valid rows to write to silver.transactions_cleaned.")
         # Ensure table is created with correct schema even if empty
-        # Infer schema from the original raw data, after initial type coercion for 'amount'
-        temp_df_schema_for_silver = transactions_raw_df.copy()
-        temp_df_schema_for_silver['amount'] = pd.to_numeric(temp_df_schema_for_silver['amount'], errors='coerce')
-        # Ensure no 'rejection_reason' column in the silver table schema
-        if 'rejection_reason' in temp_df_schema_for_silver.columns:
-            temp_df_schema_for_silver = temp_df_schema_for_silver.drop(columns=['rejection_reason'])
-        con.execute(f"CREATE OR REPLACE TABLE silver.transactions_cleaned AS SELECT * FROM temp_df_schema_for_silver WHERE 1=0")
+        # Infer schema from the processed df before filtering, then drop 'rejection_reason'
+        temp_df_schema_for_silver = df.drop(columns=['rejection_reason']).head(0)
+        con.execute(f"CREATE OR REPLACE TABLE silver.transactions_cleaned AS SELECT * FROM temp_df_schema_for_silver")
 
     # 5. Write REJECTED table rejected.rejected_rows
     # This table should accumulate rejections across pipeline runs/steps.
     # If it exists, append; otherwise, create.
     
-    # First, define the expected schema for rejected.rejected_rows.
+    # Define the expected schema for rejected.rejected_rows.
     # This ensures the table is created with consistent types, even if transactions_raw_df is empty.
-    if transactions_raw_df.empty:
-        # Define a default schema for rejected_df if source was empty
-        rejected_df_schema_template = pd.DataFrame(columns=[
-            'transaction_id', 'customer_id', 'quantity', 'amount', 
-            'transaction_date', '_source_file', '_ingest_ts', 'rejection_reason'
-        ]).astype({
-            'transaction_id': 'float64', 'customer_id': 'float64', 'quantity': 'float64', 
-            'amount': 'float64', 'transaction_date': 'string', '_source_file': 'string', 
-            '_ingest_ts': 'string', 'rejection_reason': 'string'
-        })
-    else:
-        # Use the schema from the processed df (which includes rejection_reason and coerced amount)
-        rejected_df_schema_template = df.copy()
-        # Ensure amount is float and rejection_reason is string for schema inference
-        rejected_df_schema_template['amount'] = pd.to_numeric(rejected_df_schema_template['amount'], errors='coerce')
-        rejected_df_schema_template['rejection_reason'] = rejected_df_schema_template['rejection_reason'].astype('string')
+    rejected_schema_df = pd.DataFrame(columns=[
+        'transaction_id', 'customer_id', 'quantity', 'amount', 
+        'transaction_date', '_source_file', '_ingest_ts', 'rejection_reason'
+    ]).astype({
+        'transaction_id': 'float64', 'customer_id': 'float64', 'quantity': 'float64', 
+        'amount': 'float64', 'transaction_date': 'string', '_source_file': 'string', 
+        '_ingest_ts': 'string', 'rejection_reason': 'string'
+    })
 
     # Create an empty table with the expected schema if it doesn't exist
-    con.execute(f"CREATE TABLE IF NOT EXISTS rejected.rejected_rows AS SELECT * FROM rejected_df_schema_template WHERE 1=0")
+    con.execute(f"CREATE TABLE IF NOT EXISTS rejected.rejected_rows AS SELECT * FROM rejected_schema_df WHERE 1=0")
 
     if not rejected_df.empty:
         # Append to the existing or newly created rejected.rejected_rows table
