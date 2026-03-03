@@ -23,6 +23,8 @@ def setup_database():
         (101.0, 1.0, 10.0, "$100.50 ", "2023-01-01", "file1.csv", "2023-01-01T00:00:00Z"),
         (102.0, 2.0, 5.0, " 200.00", "2023-01-02", "file2.csv", "2023-01-01T00:00:00Z"),
         (103.0, 3.0, 1.0, "30.00", "2023-01-03", "file3.csv", "2023-01-01T00:00:00Z"),
+        # Another valid row with whitespace in string columns
+        (104.0, 12.0, 2.0, " 45.75 ", " 2023-01-04 ", " file4.csv ", " 2023-01-01T00:00:00Z "),
         # Rejected: Null transaction_id
         (None, 4.0, 2.0, "40.00", "2023-01-04", "file4.csv", "2023-01-01T00:00:00Z"),
         # Rejected: Null amount
@@ -39,8 +41,6 @@ def setup_database():
         (None, 10.0, 8.0, "0.00", "2023-01-10", "file10.csv", "2023-01-01T00:00:00Z"),
         # Rejected: Null transaction_id AND Negative amount
         (None, 11.0, 9.0, "-10.00", "2023-01-11", "file11.csv", "2023-01-01T00:00:00Z"),
-        # Another valid row with whitespace in string columns
-        (104.0, 12.0, 2.0, " 45.75 ", " 2023-01-04 ", " file4.csv ", " 2023-01-01T00:00:00Z "),
     ]
     transactions_df = pd.DataFrame(transactions_data, columns=[
         "transaction_id", "customer_id", "quantity", "amount", 
