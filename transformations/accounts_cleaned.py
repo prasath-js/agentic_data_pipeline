@@ -2,8 +2,6 @@ import duckdb
 import pandas as pd
 import os
 
-# DB_PATH is provided by the execution environment
-
 def run_accounts_transformation(con):
     """
     Transforms the bronze.accounts_raw table into silver.accounts_cleaned.
@@ -22,12 +20,12 @@ def run_accounts_transformation(con):
     rejected_df = pd.DataFrame()
 
     # 2. Identify rows with null account_id. Capture these as rejections.
+    # Use .copy() to avoid SettingWithCopyWarning
     null_account_id_rows = accounts_raw_df[accounts_raw_df['account_id'].isnull()].copy()
     if not null_account_id_rows.empty:
         null_account_id_rows['rejection_reason'] = 'account_id is null'
         # Ensure all columns from accounts_raw_df are present in rejected_df, plus rejection_reason
         # This handles cases where accounts_raw_df might have fewer columns than a previously created rejected_rows table
-        # For this specific task, we assume rejected_df will always have the same base columns + rejection_reason
         rejected_df = pd.concat([rejected_df, null_account_id_rows], ignore_index=True)
 
     # Filter out rejected rows from the main DataFrame for further cleaning
@@ -36,7 +34,14 @@ def run_accounts_transformation(con):
     # 3. For remaining rows: Iterate through columns, if a column is of string type, apply str.strip().
     string_cols = cleaned_df.select_dtypes(include=['object', 'string']).columns
     for col in string_cols:
-        cleaned_df[col] = cleaned_df[col].str.strip()
+        # Apply strip only if the column is not entirely NaN
+        if not cleaned_df[col].isnull().all():
+            cleaned_df[col] = cleaned_df[col].astype(str).str.strip()
+            # Convert back to original type if it was not object/string and became object due to NaN
+            # This is a more robust way to handle mixed types or NaNs in string columns
+            # For this specific case, we assume they are strings or can be treated as such.
+            # If original type was not string, it might be converted to object by .astype(str)
+            # and then remain object. This is generally acceptable for cleaned string columns.
 
     # 4. If the 'industry' column exists, convert its values to uppercase.
     if 'industry' in cleaned_df.columns:
@@ -58,7 +63,6 @@ def run_accounts_transformation(con):
         else:
             # If table exists, append to it.
             # To ensure compatibility, we select columns from rejected_df that match the existing table.
-            # This assumes the schema of rejected.rejected_rows is stable or compatible.
             existing_cols_query = "PRAGMA table_info('rejected.rejected_rows')"
             existing_cols_df = con.execute(existing_cols_query).df()
             existing_col_names = existing_cols_df['name'].tolist()
@@ -67,7 +71,7 @@ def run_accounts_transformation(con):
             cols_to_insert = [col for col in rejected_df.columns if col in existing_col_names]
             
             # Create a temporary DataFrame with aligned columns for insertion
-            temp_rejected_df = rejected_df[cols_to_insert]
+            temp_rejected_df = rejected_df[cols_to_insert].copy() # Use .copy() to avoid SettingWithCopyWarning
 
             # If there are columns in the existing table not in temp_rejected_df, add them as NULL
             for col in existing_col_names:
@@ -77,6 +81,7 @@ def run_accounts_transformation(con):
             # Ensure column order matches the target table
             temp_rejected_df = temp_rejected_df[existing_col_names]
 
+            # Insert into the existing table
             con.execute("INSERT INTO rejected.rejected_rows SELECT * FROM temp_rejected_df")
 
     # 6. Write the final cleaned DataFrame to SILVER as accounts_cleaned.
