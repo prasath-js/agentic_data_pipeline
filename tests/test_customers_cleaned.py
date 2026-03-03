@@ -17,9 +17,8 @@ def duckdb_connection():
 def setup_bronze_data(duckdb_connection):
     """
     Sets up dummy bronze data for testing.
-    This ensures tests are self-contained and don't rely on external data.
     The transformation's main() function is assumed to be executed externally
-    before the pytest suite runs.
+    before the pytest suite runs. This fixture only creates the bronze table.
     """
     con = duckdb_connection
     con.execute("CREATE SCHEMA IF NOT EXISTS bronze;")
@@ -36,6 +35,7 @@ def setup_bronze_data(duckdb_connection):
         {'customer_id': 4.0, 'name': 'Eve', 'email': None, 'address': '303 Cedar Ct', 'join_date': '2023-01-06', '_source_file': 'a.csv', '_ingest_ts': 'ts1'},
         {'customer_id': 5.0, 'name': 'Frank', 'email': 'frank@test.com', 'address': '404 Elm St', 'join_date': '2023-01-07', '_source_file': 'a.csv', '_ingest_ts': 'ts1'},
         {'customer_id': 5.0, 'name': 'Frank', 'email': 'frank@test.com', 'address': '404 Elm St', 'join_date': '2023-01-06', '_source_file': 'a.csv', '_ingest_ts': 'ts1'}, # Duplicate, earlier join_date
+        {'customer_id': 6.0, 'name': '  Grace  ', 'email': 'grace@domain.com  ', 'address': '505 Pine St', 'join_date': '2023-01-08', '_source_file': 'c.csv', '_ingest_ts': 'ts3'},
     ]
     customers_raw_df = pd.DataFrame(customers_raw_data)
     con.execute("CREATE OR REPLACE TABLE bronze.customers_raw AS SELECT * FROM customers_raw_df;")
@@ -90,16 +90,17 @@ def test_email_is_valid_logic(duckdb_connection, setup_bronze_data):
     df = con.execute("SELECT customer_id, email, email_is_valid FROM silver.customers_cleaned;").df()
 
     # Check specific customer_ids and their email_is_valid status based on the transformation logic
-    assert df[df['customer_id'] == 1]['email_is_valid'].iloc[0] == True
-    assert df[df['customer_id'] == 2]['email_is_valid'].iloc[0] == True
-    assert df[df['customer_id'] == 3]['email_is_valid'].iloc[0] == False
-    assert df[df['customer_id'] == 4]['email_is_valid'].iloc[0] == False
-    assert df[df['customer_id'] == 5]['email_is_valid'].iloc[0] == True
+    assert df[df['customer_id'] == 1.0]['email_is_valid'].iloc[0] == True
+    assert df[df['customer_id'] == 2.0]['email_is_valid'].iloc[0] == True
+    assert df[df['customer_id'] == 3.0]['email_is_valid'].iloc[0] == False
+    assert df[df['customer_id'] == 4.0]['email_is_valid'].iloc[0] == False
+    assert df[df['customer_id'] == 5.0]['email_is_valid'].iloc[0] == True
+    assert df[df['customer_id'] == 6.0]['email_is_valid'].iloc[0] == True
 
     # Also check the actual email values to ensure they are as expected after deduplication and stripping
-    assert df[df['customer_id'] == 1]['email'].iloc[0] == 'alice.b@example.com'
-    assert df[df['customer_id'] == 3]['email'].iloc[0] == 'invalid-email'
-    assert pd.isna(df[df['customer_id'] == 4]['email'].iloc[0])
+    assert df[df['customer_id'] == 1.0]['email'].iloc[0] == 'alice.b@example.com'
+    assert df[df['customer_id'] == 3.0]['email'].iloc[0] == 'invalid-email'
+    assert pd.isna(df[df['customer_id'] == 4.0]['email'].iloc[0])
 
 def test_no_duplicate_customer_ids(duckdb_connection, setup_bronze_data):
     con = duckdb_connection
@@ -108,7 +109,26 @@ def test_no_duplicate_customer_ids(duckdb_connection, setup_bronze_data):
 
 def test_whitespace_stripped(duckdb_connection, setup_bronze_data):
     con = duckdb_connection
-    df = con.execute("SELECT name, email FROM silver.customers_cleaned WHERE customer_id = 1;").df()
-    # The kept row for customer_id 1.0 is 'Alice B' and 'alice.b@example.com'
-    assert df['name'].iloc[0] == 'Alice B'
-    assert df['email'].iloc[0] == 'alice.b@example.com'
+    df = con.execute("SELECT customer_id, name, email FROM silver.customers_cleaned WHERE customer_id IN (1.0, 6.0);").df()
+    
+    # For customer_id 1.0, the kept row is 'Alice B' and 'alice.b@example.com'
+    assert df[df['customer_id'] == 1.0]['name'].iloc[0] == 'Alice B'
+    assert df[df['customer_id'] == 1.0]['email'].iloc[0] == 'alice.b@example.com'
+
+    # For customer_id 6.0, check stripping
+    assert df[df['customer_id'] == 6.0]['name'].iloc[0] == 'Grace'
+    assert df[df['customer_id'] == 6.0]['email'].iloc[0] == 'grace@domain.com'
+
+def test_deduplication_keeps_latest_join_date(duckdb_connection, setup_bronze_data):
+    con = duckdb_connection
+    df = con.execute("SELECT customer_id, join_date FROM silver.customers_cleaned WHERE customer_id = 1.0;").df()
+    # Original data for customer_id 1.0:
+    # 2023-01-01 (Alice)
+    # 2023-01-05 (Alice B) - should be kept
+    assert df['join_date'].iloc[0].strftime('%Y-%m-%d') == '2023-01-05'
+
+    df_frank = con.execute("SELECT customer_id, join_date FROM silver.customers_cleaned WHERE customer_id = 5.0;").df()
+    # Original data for customer_id 5.0:
+    # 2023-01-07 (Frank) - should be kept
+    # 2023-01-06 (Frank)
+    assert df_frank['join_date'].iloc[0].strftime('%Y-%m-%d') == '2023-01-07'
