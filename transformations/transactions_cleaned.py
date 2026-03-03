@@ -2,8 +2,14 @@ import duckdb
 import pandas as pd
 import os
 
+# DB_PATH and DASHBOARD are injected into the environment
+# DB_PATH = os.environ.get("DB_PATH", "data/pipeline.duckdb")
+# DASHBOARD = os.environ.get("DASHBOARD", "data/dashboard")
+
 def main():
     con = duckdb.connect(DB_PATH)
+    
+    # Ensure schemas exist
     con.execute("CREATE SCHEMA IF NOT EXISTS bronze")
     con.execute("CREATE SCHEMA IF NOT EXISTS silver")
     con.execute("CREATE SCHEMA IF NOT EXISTS rejected")
@@ -11,16 +17,20 @@ def main():
     # Load data from bronze.transactions_raw
     df = con.execute("SELECT * FROM bronze.transactions_raw").df()
 
-    # Strip whitespace from all string columns
-    # Use .copy() to avoid SettingWithCopyWarning if df is a slice
+    # Create a copy to avoid SettingWithCopyWarning
     df_processed = df.copy()
+
+    # Strip whitespace from all string columns
     string_cols = df_processed.select_dtypes(include=['object', 'string']).columns
     for col in string_cols:
         # Ensure column is treated as string before stripping, handling potential non-string types
         df_processed[col] = df_processed[col].astype(str).str.strip()
 
     # Coerce 'amount' column to numeric, errors='coerce' will turn unparseable values into NaN
-    df_processed['amount'] = pd.to_numeric(df_processed['amount'], errors='coerce')
+    # First, remove currency symbols if present, then convert
+    if 'amount' in df_processed.columns:
+        df_processed['amount'] = df_processed['amount'].astype(str).str.replace(r'[$,]', '', regex=True)
+        df_processed['amount'] = pd.to_numeric(df_processed['amount'], errors='coerce')
 
     # Identify rejected rows based on conditions
     is_null_id = df_processed['transaction_id'].isnull()
@@ -41,16 +51,24 @@ def main():
     # Write valid rows to silver.transactions_cleaned
     con.execute("CREATE OR REPLACE TABLE silver.transactions_cleaned AS SELECT * FROM valid_df")
 
-    # Handle rejected rows: Create or replace rejected.rejected_rows
+    # Handle rejected rows: Append if table exists, otherwise create
     if not rejected_df.empty:
-        con.execute("CREATE OR REPLACE TABLE rejected.rejected_rows AS SELECT * FROM rejected_df")
-    else:
-        # If no rejected rows, create an empty table with the expected schema
-        # This ensures the table always exists with the correct schema for downstream processes
-        # We need to ensure 'rejection_reason' column is present even if empty
-        dummy_rejected_schema = df_processed.head(0).copy()
-        dummy_rejected_schema['rejection_reason'] = pd.Series(dtype='string')
-        con.execute("CREATE OR REPLACE TABLE rejected.rejected_rows AS SELECT * FROM dummy_rejected_schema")
+        # Register the rejected_df for DuckDB to use
+        con.register('rejected_df_temp_view', rejected_df)
+
+        # Check if rejected.rejected_rows table already exists
+        table_exists = con.execute(
+            "SELECT count(*) FROM duckdb_tables() WHERE schema_name = 'rejected' AND table_name = 'rejected_rows'"
+        ).fetchone()[0] > 0
+
+        if table_exists:
+            # Append to the existing table
+            con.execute("INSERT INTO rejected.rejected_rows SELECT * FROM rejected_df_temp_view")
+        else:
+            # Create the table if it does not exist
+            con.execute("CREATE TABLE rejected.rejected_rows AS SELECT * FROM rejected_df_temp_view")
+        
+        con.unregister('rejected_df_temp_view') # Clean up temp view
 
     con.close()
 
