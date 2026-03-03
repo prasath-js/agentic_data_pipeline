@@ -13,30 +13,37 @@ def main():
     # 1. Load customers_raw from BRONZE
     customers_raw_df = con.execute("SELECT * FROM bronze.customers_raw").df()
 
-    # Initialize rejected_df
-    rejected_df = pd.DataFrame(columns=customers_raw_df.columns.tolist() + ['rejection_reason'])
+    # Initialize rejected_df with the same columns as customers_raw_df plus 'rejection_reason'
+    # Create an empty DataFrame with the target schema for rejected rows
+    # Ensure 'rejection_reason' is of string type for consistency
+    rejected_df_template = customers_raw_df.copy()
+    rejected_df_template['rejection_reason'] = pd.Series(dtype='string')
+    rejected_df = rejected_df_template[0:0] # Create an empty DataFrame with the desired schema
 
     # 2. Identify and capture rows with null customer_id
-    null_customer_id_rows = customers_raw_df[customers_raw_df['customer_id'].isnull()]
+    null_customer_id_rows = customers_raw_df[customers_raw_df['customer_id'].isnull()].copy()
     if not null_customer_id_rows.empty:
-        null_customer_id_rows_copy = null_customer_id_rows.copy()
-        null_customer_id_rows_copy['rejection_reason'] = 'null customer_id'
-        rejected_df = pd.concat([rejected_df, null_customer_id_rows_copy], ignore_index=True)
+        null_customer_id_rows['rejection_reason'] = 'null customer_id'
+        # Ensure columns match the target rejected_df schema before concatenation
+        # This is crucial for consistent schema in the rejected table
+        # Add missing columns from rejected_df to null_customer_id_rows if any, fill with NA
+        for col in rejected_df.columns:
+            if col not in null_customer_id_rows.columns:
+                null_customer_id_rows[col] = pd.NA
+        rejected_df = pd.concat([rejected_df, null_customer_id_rows[rejected_df.columns]], ignore_index=True)
 
     # Filter out rejected rows from the main DataFrame
     customers_df = customers_raw_df.dropna(subset=['customer_id']).copy()
 
-    # Convert customer_id to integer type if it's float and has no decimals, for consistency
-    # This is a common scenario when IDs are loaded as floats due to mixed types in source
-    if pd.api.types.is_float_dtype(customers_df['customer_id']):
-        # Only convert if all values can be represented as integers
-        if (customers_df['customer_id'] == customers_df['customer_id'].astype(int)).all():
-            customers_df['customer_id'] = customers_df['customer_id'].astype(int)
+    # Convert customer_id to nullable integer type (Int64)
+    if 'customer_id' in customers_df.columns:
+        customers_df['customer_id'] = customers_df['customer_id'].astype(pd.Int64Dtype())
 
     # 3. Strip whitespace from all string columns
     string_cols = customers_df.select_dtypes(include=['object', 'string']).columns
     for col in string_cols:
-        customers_df[col] = customers_df[col].str.strip()
+        # Ensure column is treated as string before stripping, handling potential non-string types
+        customers_df[col] = customers_df[col].astype(str).str.strip()
 
     # Parse join_date to datetime if the column exists
     if 'join_date' in customers_df.columns:
@@ -53,9 +60,15 @@ def main():
     customers_df = customers_df.drop_duplicates(subset=['customer_id'], keep='first')
 
     # 5. Create a boolean column email_is_valid (True when email contains '@')
-    customers_df['email_is_valid'] = customers_df['email'].astype(str).str.contains('@', na=False)
+    if 'email' in customers_df.columns:
+        # Convert to string first to handle potential NaN/None values gracefully
+        customers_df['email_is_valid'] = customers_df['email'].astype(str).str.contains('@', na=False)
+    else:
+        # Default to False if email column is missing
+        customers_df['email_is_valid'] = False
 
     # Write cleaned rows to SILVER as customers_cleaned
+    # DuckDB will infer types from the DataFrame
     con.execute("CREATE OR REPLACE TABLE silver.customers_cleaned AS SELECT * FROM customers_df;")
 
     # Write rejected rows to rejected.rejected_rows
@@ -70,7 +83,11 @@ def main():
 
         if table_exists:
             # Append to existing table
-            con.execute("INSERT INTO rejected.rejected_rows SELECT * FROM rejected_df;")
+            # Ensure column order matches existing table if appending
+            existing_table_cols = con.execute("PRAGMA table_info('rejected.rejected_rows');").df()['name'].tolist()
+            # Reorder rejected_df columns to match existing table
+            rejected_df_reordered = rejected_df[existing_table_cols]
+            con.execute("INSERT INTO rejected.rejected_rows SELECT * FROM rejected_df_reordered;")
         else:
             # Create new table
             con.execute("CREATE OR REPLACE TABLE rejected.rejected_rows AS SELECT * FROM rejected_df;")
