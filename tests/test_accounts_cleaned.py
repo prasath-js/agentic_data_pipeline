@@ -27,7 +27,8 @@ def _run_accounts_transformation_for_test(con):
 
     string_cols = cleaned_df.select_dtypes(include=['object', 'string']).columns
     for col in string_cols:
-        cleaned_df[col] = cleaned_df[col].str.strip()
+        if not cleaned_df[col].isnull().all():
+            cleaned_df[col] = cleaned_df[col].astype(str).str.strip()
 
     if 'industry' in cleaned_df.columns:
         cleaned_df['industry'] = cleaned_df['industry'].str.upper()
@@ -46,7 +47,7 @@ def _run_accounts_transformation_for_test(con):
             existing_col_names = existing_cols_df['name'].tolist()
 
             cols_to_insert = [col for col in rejected_df.columns if col in existing_col_names]
-            temp_rejected_df = rejected_df[cols_to_insert]
+            temp_rejected_df = rejected_df[cols_to_insert].copy()
 
             for col in existing_col_names:
                 if col not in temp_rejected_df.columns:
