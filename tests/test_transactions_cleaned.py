@@ -183,6 +183,6 @@ def test_rejected_rows_schema(setup_database, duckdb_connection):
     """
     con = duckdb_connection
     schema_info = con.execute("DESCRIBE rejected.rejected_rows").df()
-    assert 'rejection_reason' in schema_info['column_name'].values, "rejected.rejected_rows should have 'rejection_reason' column"
+    assert 'rejection_reason' in schema_info['column_name'].values.tolist(), "rejected.rejected_rows should have 'rejection_reason' column"
     reason_type = schema_info[schema_info['column_name'] == 'rejection_reason']['column_type'].iloc[0]
     assert 'VARCHAR' in reason_type or 'STRING' in reason_type, f"rejection_reason should be string type, got {reason_type}"
