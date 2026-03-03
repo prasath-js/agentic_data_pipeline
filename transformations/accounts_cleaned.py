@@ -37,11 +37,6 @@ def run_accounts_transformation(con):
         # Apply strip only if the column is not entirely NaN
         if not cleaned_df[col].isnull().all():
             cleaned_df[col] = cleaned_df[col].astype(str).str.strip()
-            # Convert back to original type if it was not object/string and became object due to NaN
-            # This is a more robust way to handle mixed types or NaNs in string columns
-            # For this specific case, we assume they are strings or can be treated as such.
-            # If original type was not string, it might be converted to object by .astype(str)
-            # and then remain object. This is generally acceptable for cleaned string columns.
 
     # 4. If the 'industry' column exists, convert its values to uppercase.
     if 'industry' in cleaned_df.columns:
