@@ -21,6 +21,7 @@ def main():
     df_processed = df.copy()
 
     # Strip whitespace from all string columns
+    # Use include=['object', 'string'] for compatibility with newer pandas versions
     string_cols = df_processed.select_dtypes(include=['object', 'string']).columns
     for col in string_cols:
         # Ensure column is treated as string before stripping, handling potential non-string types
@@ -29,6 +30,7 @@ def main():
     # Coerce 'amount' column to numeric, errors='coerce' will turn unparseable values into NaN
     # First, remove currency symbols if present, then convert
     if 'amount' in df_processed.columns:
+        # Convert to string first to handle potential non-string types before regex
         df_processed['amount'] = df_processed['amount'].astype(str).str.replace(r'[$,]', '', regex=True)
         df_processed['amount'] = pd.to_numeric(df_processed['amount'], errors='coerce')
 
