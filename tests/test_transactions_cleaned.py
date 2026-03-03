@@ -5,7 +5,7 @@ import os
 
 # Define DB_PATH for tests. This will be overridden by the actual DB_PATH
 # in the execution environment, but provides a default for local testing.
-DB_PATH = os.environ.get("DB_PATH", "test_pipeline.duckdb")
+DB_PATH = os.environ.get("DB_PATH", "data/pipeline.duckdb")
 
 @pytest.fixture(scope="module")
 def setup_database():
@@ -34,6 +34,9 @@ def setup_database():
         (104.0, 5.0, 50.0, None, "2023-01-05", "file1.csv", "ts1"),
         # Rejected: Null amount (from string 'NULL' which becomes NaN)
         (105.0, 6.0, 60.0, "NULL", "2023-01-06", "file1.csv", "ts1"),
+        # Rejected: Null amount (from empty string which becomes NaN)
+        (109.0, 12.0, 120.0, "", "2023-01-12", "file1.csv", "ts1"),
+
 
         # Rejected: Zero amount
         (106.0, 7.0, 70.0, "$0.00", "2023-01-07", "file1.csv", "ts1"),
@@ -133,14 +136,16 @@ def test_rejected_rows_reasons(setup_database, duckdb_connection):
     con = duckdb_connection
     # Test specific rejection reasons based on the test data
     # Null transaction_id
-    reason_null_id = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE transaction_id IS NULL AND amount = 50.0").fetchone()[0]
+    reason_null_id = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE transaction_id IS NULL AND customer_id = 4.0").fetchone()[0]
     assert "Null transaction_id" in reason_null_id
 
-    # Null amount (from None or 'NULL' string)
+    # Null amount (from None or 'NULL' string or empty string)
     reason_null_amount_1 = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE transaction_id = 104.0").fetchone()[0]
     assert "Invalid amount (null or non-positive)" in reason_null_amount_1
     reason_null_amount_2 = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE transaction_id = 105.0").fetchone()[0]
     assert "Invalid amount (null or non-positive)" in reason_null_amount_2
+    reason_null_amount_3 = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE transaction_id = 109.0").fetchone()[0]
+    assert "Invalid amount (null or non-positive)" in reason_null_amount_3
 
     # Zero amount
     reason_zero_amount = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE transaction_id = 106.0").fetchone()[0]
