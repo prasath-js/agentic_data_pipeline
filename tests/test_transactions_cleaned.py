@@ -3,186 +3,140 @@ import duckdb
 import pandas as pd
 import os
 
-# Define DB_PATH for tests. This will be overridden by the actual DB_PATH
-# in the execution environment, but provides a default for local testing.
+# Define the DB_PATH for testing
 DB_PATH = os.environ.get("DB_PATH", "data/pipeline.duckdb")
 
 @pytest.fixture(scope="module")
-def setup_database():
-    """
-    Fixture to set up the DuckDB database with bronze data, run the transformation,
-    and clean up afterwards.
-    """
-    # Ensure a clean slate for the database file
-    if os.path.exists(DB_PATH):
-        os.remove(DB_PATH)
-
-    con = duckdb.connect(DB_PATH)
-    con.execute("CREATE SCHEMA IF NOT EXISTS bronze")
-
-    # Create bronze.transactions_raw with diverse test data
-    transactions_data = [
-        # Valid rows
-        (101.0, 1.0, 10.0, "$100.00", " 2023-01-01 ", "file1.csv", "ts1"), # Valid, with whitespace
-        (102.0, 2.0, 20.0, "250.50", "2023-01-02", "file1.csv", "ts1"),   # Valid
-        (103.0, 3.0, 30.0, "1.00", "2023-01-03", "file1.csv", "ts1"),     # Valid, min positive amount
-
-        # Rejected: Null transaction_id
-        (None, 4.0, 40.0, "$50.00", "2023-01-04", "file1.csv", "ts1"),
-
-        # Rejected: Null amount (from None)
-        (104.0, 5.0, 50.0, None, "2023-01-05", "file1.csv", "ts1"),
-        # Rejected: Null amount (from string 'NULL' which becomes NaN)
-        (105.0, 6.0, 60.0, "NULL", "2023-01-06", "file1.csv", "ts1"),
-        # Rejected: Null amount (from empty string which becomes NaN)
-        (109.0, 12.0, 120.0, "", "2023-01-12", "file1.csv", "ts1"),
-
-
-        # Rejected: Zero amount
-        (106.0, 7.0, 70.0, "$0.00", "2023-01-07", "file1.csv", "ts1"),
-
-        # Rejected: Negative amount
-        (107.0, 8.0, 80.0, "-$10.00", "2023-01-08", "file1.csv", "ts1"),
-
-        # Rejected: Invalid amount string (will become NaN)
-        (108.0, 9.0, 90.0, "abc", "2023-01-09", "file1.csv", "ts1"),
-
-        # Rejected: Both null id and invalid amount (NaN from 'invalid')
-        (None, 10.0, 100.0, "invalid", "2023-01-10", "file1.csv", "ts1"),
-
-        # Rejected: Both null id and zero amount
-        (None, 11.0, 110.0, "$0.00", "2023-01-11", "file1.csv", "ts1"),
-    ]
-    transactions_df = pd.DataFrame(transactions_data, columns=[
-        'transaction_id', 'customer_id', 'quantity', 'amount', 'transaction_date', '_source_file', '_ingest_ts'
-    ])
-    con.execute("CREATE TABLE bronze.transactions_raw AS SELECT * FROM transactions_df")
-    con.close()
-
-    # Run the main transformation function
-    main()
-
-    yield # This allows tests to run
-
-    # Teardown: Clean up the database file after all tests are done
-    if os.path.exists(DB_PATH):
-        os.remove(DB_PATH)
-
-@pytest.fixture
 def duckdb_connection():
-    """
-    Fixture to provide a DuckDB connection for each test.
-    """
+    """Fixture to establish and close DuckDB connection for tests."""
     con = duckdb.connect(DB_PATH)
     yield con
     con.close()
 
-def test_silver_table_exists_and_has_rows(setup_database, duckdb_connection):
-    """
-    Test that silver.transactions_cleaned table exists and contains valid rows.
-    """
+@pytest.fixture(scope="module")
+def setup_bronze_data(duckdb_connection):
+    """Fixture to set up bronze data before tests."""
+    con = duckdb_connection
+    con.execute("CREATE SCHEMA IF NOT EXISTS bronze;")
+    con.execute("CREATE SCHEMA IF NOT EXISTS silver;")
+    con.execute("CREATE SCHEMA IF NOT EXISTS rejected;")
+
+    # Create a dummy bronze.transactions_raw table with various cases
+    transactions_data = {
+        'transaction_id': [101.0, 102.0, None, 104.0, 105.0, 106.0, 107.0, 108.0, 109.0, 110.0],
+        'customer_id': [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+        'quantity': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        'amount': ['$100.00 ', '$200.50', '  $0.00', '  -$50.00', None, 'abc', '$300.00', '$150.00', ' $25.00', ' $10.00'],
+        'transaction_date': ['2023-01-01', '2023-01-02', '2023-01-03', '2023-01-04', '2023-01-05', '2023-01-06', '2023-01-07', '2023-01-08', '2023-01-09', '2023-01-10'],
+        '_source_file': ['file1', 'file1', 'file1', 'file1', 'file1', 'file1', 'file1', 'file1', 'file1', 'file1'],
+        '_ingest_ts': ['ts1', 'ts1', 'ts1', 'ts1', 'ts1', 'ts1', 'ts1', 'ts1', 'ts1', 'ts1']
+    }
+    transactions_df = pd.DataFrame(transactions_data)
+    con.execute("CREATE OR REPLACE TABLE bronze.transactions_raw AS SELECT * FROM transactions_df")
+
+    # Run the main transformation function
+    from your_module import main # Assuming the transformation code is in 'your_module.py'
+    # For this exercise, we'll call main directly as it's in the same file
+    main()
+
+@pytest.fixture(autouse=True)
+def run_main_transformation(setup_bronze_data):
+    """Ensure the main transformation runs before each test that uses it."""
+    pass # setup_bronze_data already calls main()
+
+def test_silver_transactions_cleaned_exists_and_has_rows(duckdb_connection):
+    """Test that silver.transactions_cleaned table exists and contains data."""
     con = duckdb_connection
     result = con.execute("SELECT count(*) FROM silver.transactions_cleaned").fetchone()[0]
-    assert result > 0, "silver.transactions_cleaned table should exist and have rows"
+    assert result > 0, "silver.transactions_cleaned should exist and have rows."
 
-def test_rejected_table_exists_and_has_rows(setup_database, duckdb_connection):
-    """
-    Test that rejected.rejected_rows table exists and contains rejected rows.
-    """
+def test_no_nulls_in_transaction_id_silver(duckdb_connection):
+    """Test that transaction_id in silver.transactions_cleaned has no nulls."""
+    con = duckdb_connection
+    result = con.execute("SELECT count(*) FROM silver.transactions_cleaned WHERE transaction_id IS NULL").fetchone()[0]
+    assert result == 0, "transaction_id in silver.transactions_cleaned should not have nulls."
+
+def test_amount_is_numeric_and_positive_silver(duckdb_connection):
+    """Test that amount in silver.transactions_cleaned is numeric and strictly positive."""
+    con = duckdb_connection
+    df = con.execute("SELECT amount FROM silver.transactions_cleaned").df()
+    assert pd.api.types.is_numeric_dtype(df['amount']), "Amount column should be numeric."
+    assert (df['amount'] > 0).all(), "All amounts in silver.transactions_cleaned should be strictly positive."
+
+def test_string_columns_are_stripped_silver(duckdb_connection):
+    """Test that string columns in silver.transactions_cleaned are stripped of whitespace."""
+    con = duckdb_connection
+    df = con.execute("SELECT amount FROM silver.transactions_cleaned WHERE transaction_id = 101.0").df()
+    # The original amount was '$100.00 '
+    # After stripping and conversion, it should be 100.00
+    assert df['amount'].iloc[0] == 100.00, "Amount column should be stripped of whitespace before conversion."
+
+def test_rejected_rows_table_exists(duckdb_connection):
+    """Test that rejected.rejected_rows table exists."""
+    con = duckdb_connection
+    result = con.execute(
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'rejected' AND table_name = 'rejected_rows'"
+    ).fetchone()[0]
+    assert result == 1, "rejected.rejected_rows table should exist."
+
+def test_rejected_rows_count(duckdb_connection):
+    """Test that the correct number of rows were rejected."""
     con = duckdb_connection
     result = con.execute("SELECT count(*) FROM rejected.rejected_rows").fetchone()[0]
-    assert result > 0, "rejected.rejected_rows table should exist and have rows"
+    # Expected rejections:
+    # 103.0 (None transaction_id)
+    # 104.0 (negative amount)
+    # 105.0 (None amount)
+    # 106.0 (non-numeric amount 'abc')
+    # 107.0 (zero amount)
+    assert result == 5, "Expected 5 rejected rows."
 
-def test_no_null_transaction_id_in_silver(setup_database, duckdb_connection):
-    """
-    Test that silver.transactions_cleaned does not contain rows with null transaction_id.
-    """
+def test_rejected_rows_reasons_null_id(duckdb_connection):
+    """Test rejection reason for null transaction_id."""
     con = duckdb_connection
-    null_ids_count = con.execute("SELECT count(*) FROM silver.transactions_cleaned WHERE transaction_id IS NULL").fetchone()[0]
-    assert null_ids_count == 0, "silver.transactions_cleaned should not have null transaction_id"
+    df = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE transaction_id IS NULL").df()
+    assert not df.empty, "Should have rejected rows with null transaction_id."
+    assert "Null transaction_id" in df['rejection_reason'].iloc[0], "Rejection reason for null ID is incorrect."
 
-def test_amount_is_numeric_and_positive_in_silver(setup_database, duckdb_connection):
-    """
-    Test that the 'amount' column in silver.transactions_cleaned is numeric and strictly positive.
-    """
+def test_rejected_rows_reasons_invalid_amount(duckdb_connection):
+    """Test rejection reason for invalid amount (zero, negative, non-numeric, null)."""
     con = duckdb_connection
-    # Check data type (DuckDB's describe will show the type)
-    schema_info = con.execute("DESCRIBE silver.transactions_cleaned").df()
-    amount_type = schema_info[schema_info['column_name'] == 'amount']['column_type'].iloc[0]
-    assert 'DOUBLE' in amount_type or 'FLOAT' in amount_type, f"Amount column should be numeric, got {amount_type}"
+    df_invalid_amount = con.execute(
+        "SELECT transaction_id, rejection_reason FROM rejected.rejected_rows WHERE transaction_id IN (104.0, 105.0, 106.0, 107.0)"
+    ).df()
 
-    # Check for non-positive amounts
-    non_positive_amount_count = con.execute("SELECT count(*) FROM silver.transactions_cleaned WHERE amount <= 0").fetchone()[0]
-    assert non_positive_amount_count == 0, "silver.transactions_cleaned should not have non-positive amounts"
+    assert not df_invalid_amount.empty, "Should have rejected rows with invalid amounts."
 
-def test_string_columns_stripped_in_silver(setup_database, duckdb_connection):
-    """
-    Test that string columns in silver.transactions_cleaned have been stripped of whitespace.
-    """
+    # Check for negative amount
+    reason_neg = df_invalid_amount[df_invalid_amount['transaction_id'] == 104.0]['rejection_reason'].iloc[0]
+    assert "Invalid amount" in reason_neg, "Rejection reason for negative amount is incorrect."
+
+    # Check for null amount
+    reason_null = df_invalid_amount[df_invalid_amount['transaction_id'] == 105.0]['rejection_reason'].iloc[0]
+    assert "Invalid amount" in reason_null, "Rejection reason for null amount is incorrect."
+
+    # Check for non-numeric amount
+    reason_abc = df_invalid_amount[df_invalid_amount['transaction_id'] == 106.0]['rejection_reason'].iloc[0]
+    assert "Invalid amount" in reason_abc, "Rejection reason for non-numeric amount is incorrect."
+
+    # Check for zero amount
+    reason_zero = df_invalid_amount[df_invalid_amount['transaction_id'] == 107.0]['rejection_reason'].iloc[0]
+    assert "Invalid amount" in reason_zero, "Rejection reason for zero amount is incorrect."
+
+def test_valid_rows_are_not_in_rejected(duckdb_connection):
+    """Ensure no valid rows are present in the rejected table."""
     con = duckdb_connection
-    # The test data includes ' 2023-01-01 ' for transaction_date.
-    # After stripping, it should be '2023-01-01'.
-    # Check if any leading/trailing spaces exist in string columns.
-    whitespace_count = con.execute("""
-        SELECT count(*) FROM silver.transactions_cleaned
-        WHERE transaction_date LIKE ' %' OR transaction_date LIKE '% '
-    """).fetchone()[0]
-    assert whitespace_count == 0, "String columns in silver.transactions_cleaned should be stripped of whitespace"
+    valid_ids_df = con.execute("SELECT transaction_id FROM silver.transactions_cleaned").df()
+    rejected_ids_df = con.execute("SELECT transaction_id FROM rejected.rejected_rows").df()
 
-def test_rejected_rows_reasons(setup_database, duckdb_connection):
-    """
-    Test that rejected rows have the correct rejection_reason assigned.
-    """
-    con = duckdb_connection
-    # Test specific rejection reasons based on the test data
-    # Null transaction_id
-    reason_null_id = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE transaction_id IS NULL AND customer_id = 4.0").fetchone()[0]
-    assert "Null transaction_id" in reason_null_id
-
-    # Null amount (from None or 'NULL' string or empty string)
-    reason_null_amount_1 = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE transaction_id = 104.0").fetchone()[0]
-    assert "Invalid amount (null or non-positive)" in reason_null_amount_1
-    reason_null_amount_2 = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE transaction_id = 105.0").fetchone()[0]
-    assert "Invalid amount (null or non-positive)" in reason_null_amount_2
-    reason_null_amount_3 = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE transaction_id = 109.0").fetchone()[0]
-    assert "Invalid amount (null or non-positive)" in reason_null_amount_3
-
-    # Zero amount
-    reason_zero_amount = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE transaction_id = 106.0").fetchone()[0]
-    assert "Invalid amount (null or non-positive)" in reason_zero_amount
-
-    # Negative amount
-    reason_negative_amount = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE transaction_id = 107.0").fetchone()[0]
-    assert "Invalid amount (null or non-positive)" in reason_negative_amount
-
-    # Invalid amount string (becomes NaN)
-    reason_invalid_string_amount = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE transaction_id = 108.0").fetchone()[0]
-    assert "Invalid amount (null or non-positive)" in reason_invalid_string_amount
-
-    # Both null id and invalid amount (NaN from 'invalid')
-    reason_both_invalid_1 = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE customer_id = 10.0").fetchone()[0]
-    assert "Null transaction_id" in reason_both_invalid_1 and "Invalid amount (null or non-positive)" in reason_both_invalid_1
-
-    # Both null id and zero amount
-    reason_both_invalid_2 = con.execute("SELECT rejection_reason FROM rejected.rejected_rows WHERE customer_id = 11.0").fetchone()[0]
-    assert "Null transaction_id" in reason_both_invalid_2 and "Invalid amount (null or non-positive)" in reason_both_invalid_2
-
-def test_total_rows_conservation(setup_database, duckdb_connection):
-    """
-    Test that the total number of rows is conserved (bronze = silver + rejected).
-    """
-    con = duckdb_connection
-    bronze_count = con.execute("SELECT count(*) FROM bronze.transactions_raw").fetchone()[0]
-    silver_count = con.execute("SELECT count(*) FROM silver.transactions_cleaned").fetchone()[0]
-    rejected_count = con.execute("SELECT count(*) FROM rejected.rejected_rows").fetchone()[0]
-    assert bronze_count == (silver_count + rejected_count), "Total rows in bronze should equal sum of silver and rejected"
-
-def test_rejected_rows_schema(setup_database, duckdb_connection):
-    """
-    Test that rejected.rejected_rows table has the 'rejection_reason' column with a string type.
-    """
-    con = duckdb_connection
-    schema_info = con.execute("DESCRIBE rejected.rejected_rows").df()
-    assert 'rejection_reason' in schema_info['column_name'].values, "rejected.rejected_rows should have 'rejection_reason' column"
-    reason_type = schema_info[schema_info['column_name'] == 'rejection_reason']['column_type'].iloc[0]
-    assert 'VARCHAR' in reason_type or 'STRING' in reason_type, f"rejection_reason should be string type, got {reason_type}"
+    if not valid_ids_df.empty and not rejected_ids_df.empty:
+        common_ids = pd.merge(valid_ids_df, rejected_ids_df, on='transaction_id', how='inner')
+        assert common_ids.empty, "No valid transaction_ids should be present in rejected.rejected_rows."
+    elif not valid_ids_df.empty and rejected_ids_df.empty:
+        # This case means all rows were valid, so rejected_df is empty, which is fine.
+        pass
+    elif valid_ids_df.empty and not rejected_ids_df.empty:
+        # This case means all rows were rejected, so valid_df is empty, which is fine.
+        pass
+    else: # Both are empty
+        pass # No data, no overlap

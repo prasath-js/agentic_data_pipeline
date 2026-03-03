@@ -2,74 +2,73 @@ import duckdb
 import pandas as pd
 import os
 
-# DB_PATH and DASHBOARD are injected into the environment
-# DB_PATH = os.environ.get("DB_PATH", "data/pipeline.duckdb")
-# DASHBOARD = os.environ.get("DASHBOARD", "data/dashboard")
-
 def main():
+    # Establish connection to DuckDB
     con = duckdb.connect(DB_PATH)
-    
+
     # Ensure schemas exist
-    con.execute("CREATE SCHEMA IF NOT EXISTS bronze")
-    con.execute("CREATE SCHEMA IF NOT EXISTS silver")
-    con.execute("CREATE SCHEMA IF NOT EXISTS rejected")
+    con.execute("CREATE SCHEMA IF NOT EXISTS bronze;")
+    con.execute("CREATE SCHEMA IF NOT EXISTS silver;")
+    con.execute("CREATE SCHEMA IF NOT EXISTS rejected;")
 
-    # Load data from bronze.transactions_raw
-    df = con.execute("SELECT * FROM bronze.transactions_raw").df()
+    # 1. Load & Initial Transform
+    # Read bronze.transactions_raw into a pandas DataFrame
+    transactions_raw_df = con.execute("SELECT * FROM bronze.transactions_raw").df()
 
-    # Create a copy to avoid SettingWithCopyWarning
-    df_processed = df.copy()
+    # Create a copy to work with
+    df = transactions_raw_df.copy()
 
     # Strip whitespace from all string columns
-    string_cols = df_processed.select_dtypes(include=['object', 'string']).columns
-    for col in string_cols:
-        # Ensure column is treated as string before stripping, handling potential non-string types
-        df_processed[col] = df_processed[col].astype(str).str.strip()
+    for col in df.select_dtypes(include=['object', 'string']).columns:
+        df[col] = df[col].str.strip()
 
-    # Coerce 'amount' column to numeric, errors='coerce' will turn unparseable values into NaN
-    # First, remove currency symbols if present, then convert
-    if 'amount' in df_processed.columns:
-        df_processed['amount'] = df_processed['amount'].astype(str).str.replace(r'[$,]', '', regex=True)
-        df_processed['amount'] = pd.to_numeric(df_processed['amount'], errors='coerce')
+    # Coerce amount column to numeric (errors='coerce')
+    # First, remove '$' sign if present, then convert to numeric
+    if 'amount' in df.columns and df['amount'].dtype == 'object':
+        df['amount'] = df['amount'].astype(str).str.replace('$', '', regex=False)
+    df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
 
-    # Identify rejected rows based on conditions
-    is_null_id = df_processed['transaction_id'].isnull()
-    is_invalid_amount = df_processed['amount'].isnull() | (df_processed['amount'] <= 0)
+    # 2. Identify Rejections
+    # Rows with null transaction_id are REJECTED
+    is_null_id = df['transaction_id'].isnull()
 
+    # Rows with null or zero or negative amount are REJECTED
+    is_invalid_amount = df['amount'].isnull() | (df['amount'] <= 0)
+
+    # Combine all rejection conditions
     rejected_mask = is_null_id | is_invalid_amount
 
-    # Prepare rejection reasons for all rows
-    df_processed['rejection_reason'] = ''
-    df_processed.loc[is_null_id, 'rejection_reason'] += 'Null transaction_id; '
-    df_processed.loc[is_invalid_amount, 'rejection_reason'] += 'Invalid amount (null or non-positive); '
-    df_processed['rejection_reason'] = df_processed['rejection_reason'].str.strip('; ')
+    # 3. Separate & Assign Reasons
+    valid_df = df[~rejected_mask].copy()
+    rejected_df = df[rejected_mask].copy()
 
-    # Separate valid and rejected rows
-    valid_df = df_processed[~rejected_mask].drop(columns=['rejection_reason']).copy()
-    rejected_df = df_processed[rejected_mask].copy()
+    # Add rejection_reason column to rejected_df
+    if not rejected_df.empty:
+        rejected_df['rejection_reason'] = ''
+        rejected_df.loc[is_null_id[rejected_mask], 'rejection_reason'] += 'Null transaction_id; '
+        rejected_df.loc[is_invalid_amount[rejected_mask], 'rejection_reason'] += 'Invalid amount; '
+        rejected_df['rejection_reason'] = rejected_df['rejection_reason'].str.strip('; ')
+    else:
+        # If no rejections, ensure the column exists for schema consistency if it were to be appended later
+        rejected_df['rejection_reason'] = pd.Series(dtype='str')
 
-    # Write valid rows to silver.transactions_cleaned
+    # 4. Write SILVER table: transactions_cleaned
     con.execute("CREATE OR REPLACE TABLE silver.transactions_cleaned AS SELECT * FROM valid_df")
 
-    # Handle rejected rows: Append if table exists, otherwise create
-    if not rejected_df.empty:
-        # Register the rejected_df for DuckDB to use
-        con.register('rejected_df_temp_view', rejected_df)
+    # 5. Write Rejected rows to rejected.rejected_rows
+    # Check if rejected.rejected_rows table exists
+    table_exists = con.execute(
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'rejected' AND table_name = 'rejected_rows'"
+    ).fetchone()[0]
 
-        # Check if rejected.rejected_rows table already exists
-        table_exists = con.execute(
-            "SELECT count(*) FROM duckdb_tables() WHERE schema_name = 'rejected' AND table_name = 'rejected_rows'"
-        ).fetchone()[0] > 0
+    if table_exists > 0:
+        # If table exists, append
+        con.execute("INSERT INTO rejected.rejected_rows SELECT * FROM rejected_df")
+    else:
+        # If table does not exist, create it
+        con.execute("CREATE OR REPLACE TABLE rejected.rejected_rows AS SELECT * FROM rejected_df")
 
-        if table_exists:
-            # Append to the existing table
-            con.execute("INSERT INTO rejected.rejected_rows SELECT * FROM rejected_df_temp_view")
-        else:
-            # Create the table if it does not exist
-            con.execute("CREATE TABLE rejected.rejected_rows AS SELECT * FROM rejected_df_temp_view")
-        
-        con.unregister('rejected_df_temp_view') # Clean up temp view
-
+    # Close connection
     con.close()
 
 if __name__ == "__main__":
