@@ -25,12 +25,12 @@ def setup_bronze_data(duckdb_connection):
     customers_data = [
         (1.0, "  John Doe  ", "john.doe@example.com ", "123 Main St", "2023-01-01", "file1.csv", "2023-01-01T00:00:00Z"),
         (2.0, " Jane Smith ", "jane.smith@example.com", "456 Oak Ave", "2023-01-02", "file1.csv", "2023-01-01T00:00:00Z"),
-        (1.0, "John Doe Alt", "john.alt@example.com", "789 Pine Rd", "2023-01-03", "file2.csv", "2023-01-02T00:00:00Z"), # Duplicate customer_id, later join_date
+        (1.0, "John Doe Alt", "john.alt@example.com", "222 Pine Rd", "2023-01-03", "file2.csv", "2023-01-02T00:00:00Z"), # Duplicate customer_id, later join_date
         (3.0, "Bob Johnson", "invalid-email", "101 Elm St", "2023-01-04", "file2.csv", "2023-01-02T00:00:00Z"),
         (None, "Null ID User", "null@example.com", "202 Cedar Ln", "2023-01-05", "file3.csv", "2023-01-03T00:00:00Z"), # Null customer_id
         (4.0, "Alice Brown", "alice.brown@example.com", "303 Birch St", "2023-01-06", "file3.csv", "2023-01-03T00:00:00Z"),
         (5.0, "Charlie Green", None, "404 Willow Dr", "2023-01-07", "file4.csv", "2023-01-04T00:00:00Z"), # Null email
-        (6.0, "David White", "david@noat.com", "505 Maple Rd", "2023-01-08", "file4.csv", "2023-01-04T00:00:00Z"), # No '@' in email
+        (6.0, "David White", "david@noat.com", "505 Maple Rd", "2023-01-08", "file4.csv", "2023-01-04T00:00:00Z"), # Contains '@'
         (7.0, "Eve Black", "eve.black@example.com", "606 Spruce St", "2023-01-09", "file5.csv", "2023-01-05T00:00:00Z"),
         (7.0, "Eve Black Old", "eve.old@example.com", "606 Spruce St", "2023-01-08", "file5.csv", "2023-01-05T00:00:00Z"), # Duplicate customer_id, earlier join_date
     ]
@@ -40,6 +40,7 @@ def setup_bronze_data(duckdb_connection):
     con.execute("CREATE OR REPLACE TABLE bronze.customers_raw AS SELECT * FROM customers_raw_df;")
 
     # Run the main transformation function
+    # This assumes the transformation code is in the same file or accessible
     from __main__ import main
     main()
 
@@ -90,29 +91,30 @@ def test_whitespace_stripped(duckdb_connection, setup_bronze_data):
     # Check 'name' column for example
     name_with_whitespace = con.execute("SELECT count(*) FROM silver.customers_cleaned WHERE name LIKE ' %' OR name LIKE '% ';").fetchone()[0]
     assert name_with_whitespace == 0, "Found names with leading/trailing whitespace."
+    # Check 'email' column for example
+    email_with_whitespace = con.execute("SELECT count(*) FROM silver.customers_cleaned WHERE email LIKE ' %' OR email LIKE '% ';").fetchone()[0]
+    assert email_with_whitespace == 0, "Found emails with leading/trailing whitespace."
+
 
 def test_email_is_valid_logic(duckdb_connection, setup_bronze_data):
     """Test the logic of the email_is_valid column."""
     con = duckdb_connection
-    # Check a valid email
+    # Check a valid email (customer_id 1)
     valid_email_check = con.execute("SELECT email_is_valid FROM silver.customers_cleaned WHERE customer_id = 1;").fetchone()[0]
-    assert valid_email_check is True, "Email 'john.doe@example.com' should be valid."
+    assert valid_email_check is True, "Email 'john.alt@example.com' should be valid."
 
-    # Check an invalid email (no '@')
+    # Check an invalid email (no '@', customer_id 3)
     invalid_email_check = con.execute("SELECT email_is_valid FROM silver.customers_cleaned WHERE customer_id = 3;").fetchone()[0]
     assert invalid_email_check is False, "Email 'invalid-email' should be invalid."
 
-    # Check an email with no '@' but some text
-    no_at_email_check = con.execute("SELECT email_is_valid FROM silver.customers_cleaned WHERE customer_id = 6;").fetchone()[0]
-    assert no_at_email_check is False, "Email 'david@noat.com' should be invalid (contains '@' but not a valid email structure, but for this rule, it should be True if it contains '@'). Re-evaluating rule: 'True when email contains '@''. So 'david@noat.com' should be True."
-    # Re-evaluating the test case for 'david@noat.com'. The rule is "True when email contains '@'".
-    # So, 'david@noat.com' *should* be True. Let's adjust the test.
-    no_at_email_check_corrected = con.execute("SELECT email_is_valid FROM silver.customers_cleaned WHERE customer_id = 6;").fetchone()[0]
-    assert no_at_email_check_corrected is True, "Email 'david@noat.com' contains '@' and should be valid by the rule."
+    # Check an email with '@' but not a typical email structure (customer_id 6)
+    # Rule: "True when email contains '@'"
+    contains_at_email_check = con.execute("SELECT email_is_valid FROM silver.customers_cleaned WHERE customer_id = 6;").fetchone()[0]
+    assert contains_at_email_check is True, "Email 'david@noat.com' contains '@' and should be valid by the rule."
 
-    # Check a null email
+    # Check a null email (customer_id 5)
     null_email_check = con.execute("SELECT email_is_valid FROM silver.customers_cleaned WHERE customer_id = 5;").fetchone()[0]
-    assert null_email_check is False, "Null email should be invalid."
+    assert null_email_check is False, "Null email should be invalid (na=False)."
 
 
 def test_rejected_rows_exists_and_content(duckdb_connection, setup_bronze_data):
@@ -142,35 +144,21 @@ def test_duplicate_customer_id_resolution(duckdb_connection, setup_bronze_data):
     assert customer_7_data['join_date'].iloc[0] == pd.Timestamp("2023-01-09"), "The entry with the latest join_date for customer_id 7 was not kept."
 
 def test_total_row_counts(duckdb_connection, setup_bronze_data):
-    """Verify BRONZE_total_rows = SILVER_cleaned_rows + REJECTED_rows."""
+    """Verify BRONZE_total_rows = SILVER_cleaned_rows + REJECTED_rows + Deduplicated_rows."""
     con = duckdb_connection
     bronze_total_rows = con.execute("SELECT count(*) FROM bronze.customers_raw;").fetchone()[0]
     silver_cleaned_rows = con.execute("SELECT count(*) FROM silver.customers_cleaned;").fetchone()[0]
     rejected_rows = con.execute("SELECT count(*) FROM rejected.rejected_rows;").fetchone()[0]
 
-    # The original bronze_total_rows is 10.
-    # One row was rejected (null customer_id).
-    # Two customer_ids (1 and 7) had duplicates, so 2 rows were dropped due to deduplication.
-    # So, 10 (bronze) - 1 (rejected) - 2 (deduplicated) = 7 (silver_cleaned).
-    # The rejected_rows table should contain 1 row.
-    # The silver_cleaned_rows should contain 7 rows.
-    # The sum of silver_cleaned_rows and rejected_rows should be 7 + 1 = 8.
-    # The difference between bronze_total_rows and (silver_cleaned_rows + rejected_rows)
-    # should account for the rows dropped due to deduplication.
+    # In our test data:
     # bronze_total_rows = 10
-    # rejected_rows = 1 (for null customer_id)
-    # silver_cleaned_rows = 7 (original 10 - 1 rejected - 2 duplicates = 7)
-    # So, bronze_total_rows - rejected_rows = 9.
-    # silver_cleaned_rows = 7.
-    # The difference is 2, which are the deduplicated rows.
-    # The test should reflect this.
+    # rejected_rows = 1 (for the row with customer_id = None)
+    # Deduplicated rows = 2 (one for customer_id 1, one for customer_id 7)
+    # Expected silver_cleaned_rows = bronze_total_rows - rejected_rows - deduplicated_rows = 10 - 1 - 2 = 7
+    assert bronze_total_rows == (rejected_rows + silver_cleaned_rows + 2), \
+        f"Row count mismatch: {bronze_total_rows} (bronze) != {rejected_rows} (rejected) + {silver_cleaned_rows} (silver) + 2 (deduplicated)"
 
-    # Number of unique customer_ids in bronze_raw that are not null
+    # Also check that the number of cleaned rows matches the number of unique non-null customer_ids in bronze
     unique_non_null_bronze = con.execute("SELECT count(DISTINCT customer_id) FROM bronze.customers_raw WHERE customer_id IS NOT NULL;").fetchone()[0]
-
-    assert rejected_rows == 1, "Expected 1 row in rejected.rejected_rows."
-    assert silver_cleaned_rows == unique_non_null_bronze, "Number of rows in silver.customers_cleaned should match unique non-null customer_ids from bronze."
-    assert bronze_total_rows == (silver_cleaned_rows + rejected_rows + (bronze_total_rows - (silver_cleaned_rows + rejected_rows))), "Row count mismatch after rejection and deduplication."
-    # More precisely: bronze_total_rows = rejected_rows + silver_cleaned_rows + (rows dropped by deduplication)
-    # In our test data: 10 = 1 + 7 + 2 (duplicates for customer_id 1 and 7)
-    assert bronze_total_rows == (rejected_rows + silver_cleaned_rows + 2), "Row count mismatch after rejection and deduplication."
+    assert silver_cleaned_rows == unique_non_null_bronze, \
+        f"Number of rows in silver.customers_cleaned ({silver_cleaned_rows}) should match unique non-null customer_ids from bronze ({unique_non_null_bronze})."
