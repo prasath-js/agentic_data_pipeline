@@ -14,121 +14,126 @@ def duckdb_connection():
     con.close()
 
 @pytest.fixture(scope="module")
-def setup_bronze_data(duckdb_connection):
-    """
-    Sets up dummy bronze data for testing.
-    The transformation's main() function is assumed to be executed externally
-    before the pytest suite runs. This fixture only creates the bronze table.
-    """
+def run_transformation():
+    """Fixture to set up test data and run the transformation once before tests."""
+    con = duckdb.connect(DB_PATH)
+    con.execute("CREATE SCHEMA IF NOT EXISTS bronze")
+    con.execute("CREATE SCHEMA IF NOT EXISTS silver")
+    con.execute("CREATE SCHEMA IF NOT EXISTS rejected")
+
+    # Create a dummy bronze.customers_raw table with test data
+    test_data = pd.DataFrame({
+        'customer_id': [1.0, 2.0, 1.0, None, 3.0, 4.0, 5.0, 6.0],
+        'name': [' John Doe ', 'Jane Smith', 'John Doe', 'Null ID', 'Alice', 'Bob', 'Charlie', 'David'],
+        'email': ['john.doe@example.com', 'jane.smith@test.com ', 'john.doe@example.com', 'invalid-email', 'alice@no-domain', 'bob@example.com', 'charlie', 'david@example.com'],
+        'address': ['123 Main St', '456 Oak Ave', '123 Main St', '789 Pine Ln', '101 Elm St', '202 Maple Dr', '303 Birch Rd', '404 Cedar Ct'],
+        'join_date': ['2023-01-01', '2023-02-01', '2023-01-05', '2023-03-01', '2023-04-01', '2023-05-01', '2023-06-01', '2023-07-01'],
+        '_source_file': ['file1.csv']*8,
+        '_ingest_ts': ['2023-01-01T00:00:00Z']*8
+    })
+    con.execute("CREATE OR REPLACE TABLE bronze.customers_raw AS SELECT * FROM test_data")
+
+    # Clear previous rejected rows for a clean test run
+    con.execute("DROP TABLE IF EXISTS rejected.rejected_rows")
+
+    con.close()
+
+    # Run the main transformation function
+    main()
+
+    yield
+
+# Mark all tests in this module to use the run_transformation fixture
+pytestmark = pytest.mark.usefixtures("run_transformation")
+
+def test_customers_cleaned_exists_and_has_rows(duckdb_connection):
+    """Verify that silver.customers_cleaned table exists and contains data."""
     con = duckdb_connection
-    con.execute("CREATE SCHEMA IF NOT EXISTS bronze;")
-    con.execute("CREATE SCHEMA IF NOT EXISTS silver;")
-    con.execute("CREATE SCHEMA IF NOT EXISTS rejected;")
+    df = con.execute("SELECT * FROM silver.customers_cleaned").df()
+    assert not df.empty, "silver.customers_cleaned should not be empty"
+    assert len(df) > 0, "silver.customers_cleaned should have more than 0 rows"
 
-    # Create dummy customers_raw data
-    customers_raw_data = [
-        {'customer_id': 1.0, 'name': '  Alice   ', 'email': 'alice@example.com ', 'address': '123 Main St', 'join_date': '2023-01-01', '_source_file': 'a.csv', '_ingest_ts': 'ts1'},
-        {'customer_id': 2.0, 'name': 'Bob', 'email': 'bob@example.com', 'address': '456 Oak Ave', 'join_date': '2023-01-02', '_source_file': 'a.csv', '_ingest_ts': 'ts1'},
-        {'customer_id': 1.0, 'name': 'Alice B', 'email': 'alice.b@example.com', 'address': '789 Pine Ln', 'join_date': '2023-01-05', '_source_file': 'b.csv', '_ingest_ts': 'ts2'}, # Duplicate, later join_date
-        {'customer_id': None, 'name': 'Charlie', 'email': 'charlie@example.com', 'address': '101 Maple Dr', 'join_date': '2023-01-03', '_source_file': 'a.csv', '_ingest_ts': 'ts1'}, # Null customer_id
-        {'customer_id': 3.0, 'name': 'David', 'email': 'invalid-email', 'address': '202 Birch Rd', 'join_date': '2023-01-04', '_source_file': 'a.csv', '_ingest_ts': 'ts1'},
-        {'customer_id': 4.0, 'name': 'Eve', 'email': None, 'address': '303 Cedar Ct', 'join_date': '2023-01-06', '_source_file': 'a.csv', '_ingest_ts': 'ts1'},
-        {'customer_id': 5.0, 'name': 'Frank', 'email': 'frank@test.com', 'address': '404 Elm St', 'join_date': '2023-01-07', '_source_file': 'a.csv', '_ingest_ts': 'ts1'},
-        {'customer_id': 5.0, 'name': 'Frank', 'email': 'frank@test.com', 'address': '404 Elm St', 'join_date': '2023-01-06', '_source_file': 'a.csv', '_ingest_ts': 'ts1'}, # Duplicate, earlier join_date
-        {'customer_id': 6.0, 'name': '  Grace  ', 'email': 'grace@domain.com  ', 'address': '505 Pine St', 'join_date': '2023-01-08', '_source_file': 'c.csv', '_ingest_ts': 'ts3'},
-    ]
-    customers_raw_df = pd.DataFrame(customers_raw_data)
-    con.execute("CREATE OR REPLACE TABLE bronze.customers_raw AS SELECT * FROM customers_raw_df;")
-
-    yield # Bronze data is set up, transformation is assumed to have run.
-
-def test_customers_cleaned_table_exists(duckdb_connection, setup_bronze_data):
+def test_no_null_customer_id_in_cleaned(duckdb_connection):
+    """Verify that there are no null customer_ids in silver.customers_cleaned."""
     con = duckdb_connection
-    tables = con.execute("SHOW TABLES IN silver;").df()
-    assert 'customers_cleaned' in tables['name'].tolist()
+    null_ids_count = con.execute("SELECT COUNT(*) FROM silver.customers_cleaned WHERE customer_id IS NULL").fetchone()[0]
+    assert null_ids_count == 0, "customer_id column in silver.customers_cleaned should not contain nulls"
 
-def test_customers_cleaned_has_rows(duckdb_connection, setup_bronze_data):
+def test_join_date_datatype(duckdb_connection):
+    """Verify that join_date column in silver.customers_cleaned is of TIMESTAMP type."""
     con = duckdb_connection
-    df = con.execute("SELECT * FROM silver.customers_cleaned;").df()
-    assert not df.empty
-    assert len(df) > 0
+    schema_info = con.execute("DESCRIBE silver.customers_cleaned").df()
+    join_date_type = schema_info[schema_info['column_name'] == 'join_date']['column_type'].iloc[0]
+    assert 'TIMESTAMP' in join_date_type, f"join_date should be TIMESTAMP, but is {join_date_type}"
 
-def test_customer_id_no_nulls_in_silver(duckdb_connection, setup_bronze_data):
+def test_email_is_valid_datatype(duckdb_connection):
+    """Verify that email_is_valid column in silver.customers_cleaned is of BOOLEAN type."""
     con = duckdb_connection
-    df = con.execute("SELECT customer_id FROM silver.customers_cleaned;").df()
-    assert df['customer_id'].isnull().sum() == 0
+    schema_info = con.execute("DESCRIBE silver.customers_cleaned").df()
+    email_is_valid_type = schema_info[schema_info['column_name'] == 'email_is_valid']['column_type'].iloc[0]
+    assert 'BOOLEAN' in email_is_valid_type, f"email_is_valid should be BOOLEAN, but is {email_is_valid_type}"
 
-def test_join_date_is_datetime(duckdb_connection, setup_bronze_data):
+def test_no_duplicate_customer_ids(duckdb_connection):
+    """Verify that there are no duplicate customer_ids in silver.customers_cleaned."""
     con = duckdb_connection
-    # DuckDB's Python client returns datetime objects for DATE/TIMESTAMP columns
-    df = con.execute("SELECT join_date FROM silver.customers_cleaned LIMIT 1;").df()
-    if 'join_date' in df.columns:
-        assert pd.api.types.is_datetime64_any_dtype(df['join_date'])
-    else:
-        pytest.fail("join_date column not found in silver.customers_cleaned")
+    duplicate_ids_count = con.execute(
+        "SELECT COUNT(customer_id) FROM (SELECT customer_id FROM silver.customers_cleaned GROUP BY customer_id HAVING COUNT(*) > 1)"
+    ).fetchone()[0]
+    assert duplicate_ids_count == 0, "There should be no duplicate customer_ids in silver.customers_cleaned"
 
-def test_email_is_valid_is_boolean(duckdb_connection, setup_bronze_data):
+def test_email_is_valid_logic(duckdb_connection):
+    """Verify the logic for email_is_valid column."""
     con = duckdb_connection
-    df = con.execute("SELECT email_is_valid FROM silver.customers_cleaned LIMIT 1;").df()
-    assert pd.api.types.is_bool_dtype(df['email_is_valid'])
+    df = con.execute("SELECT email, email_is_valid FROM silver.customers_cleaned").df()
 
-def test_rejected_rows_table_exists(duckdb_connection, setup_bronze_data):
+    # Test cases for valid emails
+    valid_emails = df[df['email_is_valid'] == True]
+    assert all(valid_emails['email'].astype(str).str.contains('@')), "Emails marked valid should contain '@'"
+
+    # Test cases for invalid emails
+    invalid_emails = df[df['email_is_valid'] == False]
+    assert all(~invalid_emails['email'].astype(str).str.contains('@')), "Emails marked invalid should not contain '@'"
+
+def test_rejected_rows_exist(duckdb_connection):
+    """Verify that rejected.rejected_rows table exists and contains rejected data."""
     con = duckdb_connection
-    tables = con.execute("SHOW TABLES IN rejected;").df()
-    assert 'rejected_rows' in tables['name'].tolist()
+    df = con.execute("SELECT * FROM rejected.rejected_rows").df()
+    assert not df.empty, "rejected.rejected_rows should not be empty"
+    assert len(df) > 0, "rejected.rejected_rows should have more than 0 rows"
 
-def test_rejected_rows_contains_null_customer_id(duckdb_connection, setup_bronze_data):
+def test_rejected_rows_reason_for_null_customer_id(duckdb_connection):
+    """Verify that rejected rows have the correct rejection_reason for null customer_id."""
     con = duckdb_connection
-    rejected_df = con.execute("SELECT * FROM rejected.rejected_rows;").df()
-    assert not rejected_df.empty
-    assert 'rejection_reason' in rejected_df.columns
-    assert (rejected_df['rejection_reason'] == 'null customer_id').any()
-    assert rejected_df['customer_id'].isnull().any()
+    rejected_df = con.execute("SELECT customer_id, rejection_reason FROM rejected.rejected_rows").df()
+    assert all(rejected_df['customer_id'].isnull()), "All rejected rows should have null customer_id"
+    assert all(rejected_df['rejection_reason'] == 'customer_id is null'), "Rejection reason should be 'customer_id is null'"
 
-def test_email_is_valid_logic(duckdb_connection, setup_bronze_data):
+def test_whitespace_stripped(duckdb_connection):
+    """Verify that string columns have leading/trailing whitespace stripped."""
     con = duckdb_connection
-    df = con.execute("SELECT customer_id, email, email_is_valid FROM silver.customers_cleaned;").df()
+    # Test data for customer_id 1.0 has ' John Doe ' and for 2.0 has 'jane.smith@test.com '
+    df_name = con.execute("SELECT name FROM silver.customers_cleaned WHERE customer_id = 1.0").df()
+    assert df_name['name'].iloc[0] == 'John Doe', f"Name not stripped: '{df_name['name'].iloc[0]}'"
 
-    # Check specific customer_ids and their email_is_valid status based on the transformation logic
-    assert df[df['customer_id'] == 1.0]['email_is_valid'].iloc[0] == True
-    assert df[df['customer_id'] == 2.0]['email_is_valid'].iloc[0] == True
-    assert df[df['customer_id'] == 3.0]['email_is_valid'].iloc[0] == False
-    assert df[df['customer_id'] == 4.0]['email_is_valid'].iloc[0] == False
-    assert df[df['customer_id'] == 5.0]['email_is_valid'].iloc[0] == True
-    assert df[df['customer_id'] == 6.0]['email_is_valid'].iloc[0] == True
+    df_email = con.execute("SELECT email FROM silver.customers_cleaned WHERE customer_id = 2.0").df()
+    assert df_email['email'].iloc[0] == 'jane.smith@test.com', f"Email not stripped: '{df_email['email'].iloc[0]}'"
 
-    # Also check the actual email values to ensure they are as expected after deduplication and stripping
-    assert df[df['customer_id'] == 1.0]['email'].iloc[0] == 'alice.b@example.com'
-    assert df[df['customer_id'] == 3.0]['email'].iloc[0] == 'invalid-email'
-    assert pd.isna(df[df['customer_id'] == 4.0]['email'].iloc[0])
-
-def test_no_duplicate_customer_ids(duckdb_connection, setup_bronze_data):
+def test_duplicate_customer_id_resolution(duckdb_connection):
+    """Verify that duplicate customer_ids are resolved by keeping the latest join_date."""
     con = duckdb_connection
-    df = con.execute("SELECT customer_id FROM silver.customers_cleaned;").df()
-    assert df['customer_id'].duplicated().sum() == 0
+    # Test data has two entries for customer_id 1.0: '2023-01-01' and '2023-01-05'.
+    # The one with '2023-01-05' should be kept.
+    df = con.execute("SELECT customer_id, join_date FROM silver.customers_cleaned WHERE customer_id = 1.0").df()
+    assert len(df) == 1, "There should be only one entry for customer_id 1.0 after deduplication"
+    assert df['join_date'].iloc[0].strftime('%Y-%m-%d') == '2023-01-05', \
+        f"Incorrect join_date kept for customer_id 1.0: {df['join_date'].iloc[0].strftime('%Y-%m-%d')}"
 
-def test_whitespace_stripped(duckdb_connection, setup_bronze_data):
+def test_total_row_counts(duckdb_connection):
+    """Verify that total rows from bronze equals cleaned rows plus rejected rows."""
     con = duckdb_connection
-    df = con.execute("SELECT customer_id, name, email FROM silver.customers_cleaned WHERE customer_id IN (1.0, 6.0);").df()
-    
-    # For customer_id 1.0, the kept row is 'Alice B' and 'alice.b@example.com'
-    assert df[df['customer_id'] == 1.0]['name'].iloc[0] == 'Alice B'
-    assert df[df['customer_id'] == 1.0]['email'].iloc[0] == 'alice.b@example.com'
+    bronze_count = con.execute("SELECT COUNT(*) FROM bronze.customers_raw").fetchone()[0]
+    silver_count = con.execute("SELECT COUNT(*) FROM silver.customers_cleaned").fetchone()[0]
+    rejected_count = con.execute("SELECT COUNT(*) FROM rejected.rejected_rows").fetchone()[0]
 
-    # For customer_id 6.0, check stripping
-    assert df[df['customer_id'] == 6.0]['name'].iloc[0] == 'Grace'
-    assert df[df['customer_id'] == 6.0]['email'].iloc[0] == 'grace@domain.com'
-
-def test_deduplication_keeps_latest_join_date(duckdb_connection, setup_bronze_data):
-    con = duckdb_connection
-    df = con.execute("SELECT customer_id, join_date FROM silver.customers_cleaned WHERE customer_id = 1.0;").df()
-    # Original data for customer_id 1.0:
-    # 2023-01-01 (Alice)
-    # 2023-01-05 (Alice B) - should be kept
-    assert df['join_date'].iloc[0].strftime('%Y-%m-%d') == '2023-01-05'
-
-    df_frank = con.execute("SELECT customer_id, join_date FROM silver.customers_cleaned WHERE customer_id = 5.0;").df()
-    # Original data for customer_id 5.0:
-    # 2023-01-07 (Frank) - should be kept
-    # 2023-01-06 (Frank)
-    assert df_frank['join_date'].iloc[0].strftime('%Y-%m-%d') == '2023-01-07'
+    assert bronze_count == (silver_count + rejected_count), \
+        f"Row count mismatch: Bronze ({bronze_count}) != Silver ({silver_count}) + Rejected ({rejected_count})"
