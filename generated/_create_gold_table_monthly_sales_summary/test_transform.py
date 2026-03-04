@@ -1,15 +1,15 @@
 import pandas as pd
 import numpy as np
-from __main__ import transform # Assuming this script is run directly or imported as __main__ for testing
+from transform import transform
 
 def test_basic_monthly_summary():
-    # Test case 1: Basic aggregation and sorting for two months
+    # Test case 1: Basic aggregation and sorting for multiple months
     data = {
-        'transaction_id': [1, 2, 3, 4, 5],
-        'customer_id': [101, 102, 101, 103, 102],
-        'quantity': [1, 2, 1, 3, 2],
-        'amount': [10.0, 20.0, 15.0, 30.0, 25.0],
-        'transaction_date': ['2023-01-05', '2023-01-10', '2023-02-01', '2023-02-15', '2023-03-01']
+        'transaction_id': [1, 2, 3, 4, 5, 6],
+        'customer_id': [101, 102, 101, 103, 102, 104],
+        'quantity': [1, 2, 1, 3, 2, 1],
+        'amount': [10.0, 20.0, 15.0, 30.0, 25.0, 5.0],
+        'transaction_date': ['2023-01-05', '2023-01-10', '2023-02-01', '2023-02-15', '2023-03-01', '2023-03-10']
     }
     df = pd.DataFrame(data)
     df['transaction_date'] = pd.to_datetime(df['transaction_date'])
@@ -19,13 +19,13 @@ def test_basic_monthly_summary():
     # Expected calculations:
     # 2023-01: revenue=10+20=30, count=2, mom_growth=NaN
     # 2023-02: revenue=15+30=45, count=2, mom_growth=(45-30)/30 * 100 = 50.0
-    # 2023-03: revenue=25, count=1, mom_growth=(25-45)/45 * 100 = -44.44...
+    # 2023-03: revenue=25+5=30, count=2, mom_growth=(30-45)/45 * 100 = -33.33...
 
     expected_data = {
         'year_month': ['2023-01', '2023-02', '2023-03'],
-        'monthly_revenue': [30.0, 45.0, 25.0],
-        'transaction_count': [2, 2, 1],
-        'mom_growth': [np.nan, 50.0, (25.0 - 45.0) / 45.0 * 100]
+        'monthly_revenue': [30.0, 45.0, 30.0],
+        'transaction_count': [2, 2, 2],
+        'mom_growth': [np.nan, 50.0, (30.0 - 45.0) / 45.0 * 100]
     }
     expected_df = pd.DataFrame(expected_data)
     expected_df['mom_growth'] = expected_df['mom_growth'].astype(float) # Ensure float type for NaN comparison
@@ -90,20 +90,47 @@ def test_empty_dataframe_input():
 def test_dataframe_with_unparseable_dates():
     # Test case 4: DataFrame with dates that cannot be parsed
     data = {
-        'transaction_id': [1, 2, 3],
-        'customer_id': [101, 102, 103],
-        'quantity': [1, 2, 3],
-        'amount': [10.0, 20.0, 30.0],
-        'transaction_date': ['2023-01-01', 'invalid-date', '2023-01-15']
+        'transaction_id': [1, 2, 3, 4],
+        'customer_id': [101, 102, 103, 104],
+        'quantity': [1, 2, 3, 4],
+        'amount': [10.0, 20.0, 30.0, 40.0],
+        'transaction_date': ['2023-01-01', 'invalid-date', '2023-01-15', '2023-02-01']
     }
     df = pd.DataFrame(data)
 
     result = transform(df)
 
     # Only valid dates should be processed
+    # 2023-01: revenue=10.0 + 30.0 = 40.0, count=2
+    # 2023-02: revenue=40.0, count=1
+    expected_data = {
+        'year_month': ['2023-01', '2023-02'],
+        'monthly_revenue': [40.0, 40.0],
+        'transaction_count': [2, 1],
+        'mom_growth': [np.nan, (40.0 - 40.0) / 40.0 * 100] # 0.0
+    }
+    expected_df = pd.DataFrame(expected_data)
+    expected_df['mom_growth'] = expected_df['mom_growth'].astype(float)
+
+    pd.testing.assert_frame_equal(result, expected_df, check_dtype=True, check_exact=False, rtol=1e-6)
+
+def test_single_month_data():
+    # Test case 5: Data for only a single month
+    data = {
+        'transaction_id': [1, 2],
+        'customer_id': [101, 102],
+        'quantity': [1, 2],
+        'amount': [100.0, 200.0],
+        'transaction_date': ['2023-01-01', '2023-01-15']
+    }
+    df = pd.DataFrame(data)
+    df['transaction_date'] = pd.to_datetime(df['transaction_date'])
+
+    result = transform(df)
+
     expected_data = {
         'year_month': ['2023-01'],
-        'monthly_revenue': [40.0], # 10.0 + 30.0
+        'monthly_revenue': [300.0],
         'transaction_count': [2],
         'mom_growth': [np.nan]
     }
