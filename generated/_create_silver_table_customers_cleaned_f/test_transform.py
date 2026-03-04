@@ -1,118 +1,144 @@
 import pandas as pd
 import pytest
-from datetime import datetime, date
-from transform import transform_customers
+from transform import transform
 
-def test_strip_whitespace():
+def test_transform_basic_cleaning_and_email_validation():
     """
-    Test that whitespace is stripped from string columns.
+    Test basic string stripping, date parsing, and email validation
+    with no duplicates.
     """
     data = {
-        'customer_id': [1, 2],
-        'name': [' John Doe ', 'Jane Smith '],
-        'email': [' test@example.com ', 'another@example.com'],
+        'customer_id': [1.0, 2.0, 3.0],
+        'name': ['  John Doe  ', 'Jane Smith', 'Peter Jones '],
+        'email': ['john.doe@example.com', 'invalid-email', 'peter@test.com '],
+        'address': ['123 Main St', '456 Oak Ave', '789 Pine Ln'],
+        'join_date': ['2023-01-01', '2023-02-15', '2023-03-20'],
+        '_source_file': ['f1', 'f1', 'f1'],
+        '_ingest_ts': ['ts1', 'ts1', 'ts1']
+    }
+    df = pd.DataFrame(data)
+
+    expected_data = {
+        'customer_id': [1.0, 2.0, 3.0],
+        'name': ['John Doe', 'Jane Smith', 'Peter Jones'],
+        'email': ['john.doe@example.com', 'invalid-email', 'peter@test.com'],
+        'address': ['123 Main St', '456 Oak Ave', '789 Pine Ln'],
+        'join_date': pd.to_datetime(['2023-01-01', '2023-02-15', '2023-03-20']),
+        '_source_file': ['f1', 'f1', 'f1'],
+        '_ingest_ts': ['ts1', 'ts1', 'ts1'],
+        'email_is_valid': [True, False, True]
+    }
+    expected_df = pd.DataFrame(expected_data)
+
+    result_df = transform(df)
+
+    pd.testing.assert_frame_equal(result_df, expected_df, check_dtype=True)
+
+def test_transform_duplicate_handling_and_missing_values():
+    """
+    Test duplicate handling (keeping latest join_date),
+    whitespace, and handling of NaN values in email/join_date.
+    """
+    data = {
+        'customer_id': [1.0, 2.0, 1.0, 3.0, 2.0],
+        'name': ['  Alice  ', 'Bob', 'Alice', 'Charlie', 'Bob '],
+        'email': ['alice@example.com', 'bob@test.com', 'alice.old@example.com', None, 'bob.new@test.com'],
+        'address': ['101 A', '202 B', '101 A', '303 C', '202 B'],
+        'join_date': ['2023-01-01', '2023-02-01', '2022-12-01', 'invalid-date', '2023-02-10'],
+        '_source_file': ['f1', 'f1', 'f1', 'f1', 'f1'],
+        '_ingest_ts': ['ts1', 'ts1', 'ts1', 'ts1', 'ts1']
+    }
+    df = pd.DataFrame(data)
+
+    expected_data = {
+        'customer_id': [1.0, 2.0, 3.0],
+        'name': ['Alice', 'Bob', 'Charlie'],
+        'email': ['alice@example.com', 'bob.new@test.com', None],
+        'address': ['101 A', '202 B', '303 C'],
+        'join_date': pd.to_datetime(['2023-01-01', '2023-02-10', 'NaT']),
+        '_source_file': ['f1', 'f1', 'f1'],
+        '_ingest_ts': ['ts1', 'ts1', 'ts1'],
+        'email_is_valid': [True, True, False]
+    }
+    expected_df = pd.DataFrame(expected_data)
+    # Ensure the order of columns is the same for comparison
+    expected_df = expected_df[df.columns.tolist() + ['email_is_valid']]
+
+
+    result_df = transform(df)
+
+    # Sort both dataframes by customer_id before comparison to handle potential order differences
+    # from drop_duplicates if the original input order was not strictly sorted.
+    # The transform function sorts internally, but for robust testing, ensure final comparison is order-agnostic for customer_id.
+    result_df = result_df.sort_values(by='customer_id').reset_index(drop=True)
+    expected_df = expected_df.sort_values(by='customer_id').reset_index(drop=True)
+
+    pd.testing.assert_frame_equal(result_df, expected_df, check_dtype=True)
+
+def test_transform_empty_dataframe():
+    """
+    Test with an empty DataFrame.
+    """
+    df = pd.DataFrame(columns=['customer_id', 'name', 'email', 'address', 'join_date', '_source_file', '_ingest_ts'])
+    result_df = transform(df)
+
+    expected_columns = ['customer_id', 'name', 'email', 'address', 'join_date', '_source_file', '_ingest_ts', 'email_is_valid']
+    expected_df = pd.DataFrame(columns=expected_columns)
+    expected_df['join_date'] = pd.to_datetime(expected_df['join_date']) # Ensure datetime dtype for join_date
+    expected_df['email_is_valid'] = expected_df['email_is_valid'].astype(bool) # Ensure bool dtype for email_is_valid
+
+    pd.testing.assert_frame_equal(result_df, expected_df, check_dtype=True)
+
+def test_transform_no_email_column():
+    """
+    Test behavior when the 'email' column is missing.
+    email_is_valid should be False for all rows.
+    """
+    data = {
+        'customer_id': [1.0, 2.0],
+        'name': ['Test User', 'Another User'],
+        'address': ['1 Test', '2 Another'],
         'join_date': ['2023-01-01', '2023-01-02']
     }
     df = pd.DataFrame(data)
-    transformed_df = transform_customers(df)
-
-    assert transformed_df['name'].iloc[0] == 'John Doe'
-    assert transformed_df['name'].iloc[1] == 'Jane Smith'
-    assert transformed_df['email'].iloc[0] == 'test@example.com'
-    assert transformed_df['email'].iloc[1] == 'another@example.com'
-
-def test_parse_join_date():
-    """
-    Test that join_date is correctly parsed to datetime objects.
-    Also test handling of invalid dates.
-    """
-    data = {
-        'customer_id': [1, 2, 3],
-        'name': ['John', 'Jane', 'Peter'],
-        'join_date': ['2023-01-01', '2023-02-15', 'invalid-date']
-    }
-    df = pd.DataFrame(data)
-    transformed_df = transform_customers(df)
-
-    assert pd.api.types.is_datetime64_any_dtype(transformed_df['join_date'])
-    assert transformed_df['join_date'].iloc[0] == datetime(2023, 1, 1)
-    assert transformed_df['join_date'].iloc[1] == datetime(2023, 2, 15)
-    assert pd.isna(transformed_df['join_date'].iloc[2])
-
-def test_drop_duplicates_latest_join_date():
-    """
-    Test that duplicate customer_ids are dropped, keeping the row with the latest join_date.
-    """
-    data = {
-        'customer_id': [1, 2, 1, 3, 2],
-        'name': ['John A', 'Jane A', 'John B', 'Alice', 'Jane B'],
-        'email': ['john@a.com', 'jane@a.com', 'john@b.com', 'alice@c.com', 'jane@b.com'],
-        'join_date': ['2023-01-01', '2023-01-05', '2023-01-02', '2023-01-10', '2023-01-04']
-    }
-    df = pd.DataFrame(data)
-    transformed_df = transform_customers(df)
 
     expected_data = {
-        'customer_id': [1, 2, 3],
-        'name': ['John B', 'Jane A', 'Alice'],
-        'email': ['john@b.com', 'jane@a.com', 'alice@c.com'],
-        'join_date': [datetime(2023, 1, 2), datetime(2023, 1, 5), datetime(2023, 1, 10)],
-        'email_is_valid': [True, True, True]
+        'customer_id': [1.0, 2.0],
+        'name': ['Test User', 'Another User'],
+        'address': ['1 Test', '2 Another'],
+        'join_date': pd.to_datetime(['2023-01-01', '2023-01-02']),
+        'email_is_valid': [False, False]
     }
     expected_df = pd.DataFrame(expected_data)
-    # Sort both for comparison as order might change due to drop_duplicates
-    pd.testing.assert_frame_equal(
-        transformed_df.sort_values(by='customer_id').reset_index(drop=True),
-        expected_df.sort_values(by='customer_id').reset_index(drop=True),
-        check_dtype=False # join_date might have different timezone info
-    )
+    expected_df = expected_df[df.columns.tolist() + ['email_is_valid']] # Maintain column order
 
-def test_email_is_valid_column():
+    result_df = transform(df)
+    pd.testing.assert_frame_equal(result_df, expected_df, check_dtype=True)
+
+def test_transform_no_join_date_column():
     """
-    Test the creation of the email_is_valid boolean column.
+    Test behavior when the 'join_date' column is missing.
     """
     data = {
-        'customer_id': [1, 2, 3, 4],
-        'name': ['John', 'Jane', 'Peter', 'Mary'],
-        'email': ['valid@example.com', 'invalid-email', 'another@domain.co.uk', None],
-        'join_date': ['2023-01-01', '2023-01-02', '2023-01-03', '2023-01-04']
+        'customer_id': [1.0, 2.0, 1.0],
+        'name': ['User A', 'User B', 'User A'],
+        'email': ['a@example.com', 'b@example.com', 'a@example.com'],
+        'address': ['Addr A', 'Addr B', 'Addr A']
     }
     df = pd.DataFrame(data)
-    transformed_df = transform_customers(df)
 
-    assert 'email_is_valid' in transformed_df.columns
-    assert transformed_df['email_is_valid'].iloc[0] is True
-    assert transformed_df['email_is_valid'].iloc[1] is False
-    assert transformed_df['email_is_valid'].iloc[2] is True
-    assert transformed_df['email_is_valid'].iloc[3] is False # None should result in False
-
-def test_empty_dataframe():
-    """
-    Test handling of an empty DataFrame.
-    """
-    df = pd.DataFrame(columns=['customer_id', 'name', 'email', 'join_date'])
-    transformed_df = transform_customers(df)
-
-    assert transformed_df.empty
-    assert 'email_is_valid' in transformed_df.columns
-    assert pd.api.types.is_datetime64_any_dtype(transformed_df['join_date'])
-
-def test_missing_columns():
-    """
-    Test handling when some expected columns are missing.
-    """
-    data = {
-        'customer_id': [1, 2],
-        'name': ['John', 'Jane']
-        # email and join_date are missing
+    expected_data = {
+        'customer_id': [1.0, 2.0],
+        'name': ['User A', 'User B'],
+        'email': ['a@example.com', 'b@example.com'],
+        'address': ['Addr A', 'Addr B'],
+        'email_is_valid': [True, True]
     }
-    df = pd.DataFrame(data)
-    transformed_df = transform_customers(df)
+    expected_df = pd.DataFrame(expected_data)
+    expected_df = expected_df[df.columns.tolist() + ['email_is_valid']] # Maintain column order
 
-    assert 'customer_id' in transformed_df.columns
-    assert 'name' in transformed_df.columns
-    assert 'email_is_valid' in transformed_df.columns
-    assert transformed_df['email_is_valid'].iloc[0] is False # Should default to False if email column is missing
-    assert 'join_date' not in transformed_df.columns # Should not be added if not present
-    assert len(transformed_df) == 2 # No duplicates to drop without join_date or email
-    assert transformed_df['name'].iloc[0] == 'John' # Should still strip whitespace if present
+    result_df = transform(df)
+    result_df = result_df.sort_values(by='customer_id').reset_index(drop=True)
+    expected_df = expected_df.sort_values(by='customer_id').reset_index(drop=True)
+
+    pd.testing.assert_frame_equal(result_df, expected_df, check_dtype=True)
