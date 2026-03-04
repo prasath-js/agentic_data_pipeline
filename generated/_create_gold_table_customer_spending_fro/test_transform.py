@@ -1,7 +1,3 @@
-import pandas as pd
-import numpy as np
-from pandas.testing import assert_frame_equal
-
 from transform import transform
 
 def test_transform_spending_tiers():
