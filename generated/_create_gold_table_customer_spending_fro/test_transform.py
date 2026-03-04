@@ -1,4 +1,4 @@
-from transform import transform
+from __main__ import transform
 import pandas as pd
 import numpy as np
 
@@ -67,3 +67,4 @@ def test_empty_dataframe():
     result_df = transform(df)
     assert result_df.empty
     assert 'spending_tier' in result_df.columns
+    assert result_df['spending_tier'].dtype == object # Should be object/str for string categories
