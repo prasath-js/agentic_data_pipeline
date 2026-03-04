@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import pytest
-from __main__ import transform # Assuming transform is in the same file for testing
+from transform import transform # Assuming transform is in a module named 'transform' or accessible
 
 def test_high_spending_customer():
     data = {
