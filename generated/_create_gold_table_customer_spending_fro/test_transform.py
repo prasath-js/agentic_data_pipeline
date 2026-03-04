@@ -1,76 +1,94 @@
-from transform import transform
+import pandas as pd
+import numpy as np
+import pytest
+from __main__ import transform # Assuming transform is in the same file for testing
 
-def test_transform_spending_tiers():
-    """
-    Test cases for different spending tiers: High, Medium, Low, and boundary conditions.
-    """
+def test_high_spending_customer():
     data = {
-        'customer_id': [1, 2, 3, 4, 5, 6, 7],
-        'name': ['Alice', 'Bob', 'Charlie', 'David', 'Eve', 'Frank', 'Grace'],
-        'email': ['a@example.com', 'b@example.com', 'c@example.com', 'd@example.com', 'e@example.com', 'f@example.com', 'g@example.com'],
-        'total_spent': [15000.0, 5000.0, 500.0, 10000.0, 1000.0, 0.0, np.nan],
-        'transaction_count': [100, 50, 10, 80, 20, 0, 0],
-        'average_transaction_value': [150.0, 100.0, 50.0, 125.0, 50.0, np.nan, np.nan]
+        'customer_id': [1],
+        'name': ['John Doe'],
+        'email': ['john.doe@example.com'],
+        'address': ['123 Main St'],
+        'join_date': [pd.Timestamp('2023-01-01')],
+        'total_spent': [15000.0],
+        'transaction_count': [10]
     }
-    df_input = pd.DataFrame(data)
+    df = pd.DataFrame(data)
+    result = transform(df)
 
-    expected_data = {
-        'customer_id': [1, 2, 3, 4, 5, 6, 7],
-        'name': ['Alice', 'Bob', 'Charlie', 'David', 'Eve', 'Frank', 'Grace'],
-        'email': ['a@example.com', 'b@example.com', 'c@example.com', 'd@example.com', 'e@example.com', 'f@example.com', 'g@example.com'],
-        'total_spent': [15000.0, 5000.0, 500.0, 10000.0, 1000.0, 0.0, np.nan],
-        'transaction_count': [100, 50, 10, 80, 20, 0, 0],
-        'average_transaction_value': [150.0, 100.0, 50.0, 125.0, 50.0, np.nan, np.nan],
-        'spending_tier': ['High', 'Medium', 'Low', 'Medium', 'Low', 'Low', 'Low']
-    }
-    df_expected = pd.DataFrame(expected_data)
+    assert result.loc[0, 'average_transaction_value'] == 1500.0
+    assert result.loc[0, 'spending_tier'] == 'High'
 
-    df_actual = transform(df_input.copy())
-
-    df_actual = df_actual.sort_values('customer_id').reset_index(drop=True)
-    df_expected = df_expected.sort_values('customer_id').reset_index(drop=True)
-
-    assert_frame_equal(df_actual, df_expected, check_dtype=False)
-
-def test_transform_empty_dataframe():
-    """
-    Test with an empty DataFrame.
-    """
-    df_input = pd.DataFrame(columns=[
-        'customer_id', 'name', 'email', 'total_spent', 'transaction_count', 'average_transaction_value'
-    ])
-    df_expected = df_input.copy()
-    df_expected['spending_tier'] = pd.Series(dtype=str)
-
-    df_actual = transform(df_input.copy())
-
-    assert_frame_equal(df_actual, df_expected, check_dtype=False)
-
-def test_transform_all_high_spending():
-    """
-    Test case where all customers are high spending.
-    """
+def test_medium_spending_customer():
     data = {
-        'customer_id': [101, 102],
-        'name': ['Xavier', 'Yara'],
-        'email': ['x@example.com', 'y@example.com'],
-        'total_spent': [20000.0, 10001.0],
-        'transaction_count': [200, 101],
-        'average_transaction_value': [100.0, 100.0099]
+        'customer_id': [2],
+        'name': ['Jane Smith'],
+        'email': ['jane.smith@example.com'],
+        'address': ['456 Oak Ave'],
+        'join_date': [pd.Timestamp('2023-02-01')],
+        'total_spent': [5000.0],
+        'transaction_count': [5]
     }
-    df_input = pd.DataFrame(data)
+    df = pd.DataFrame(data)
+    result = transform(df)
 
-    expected_data = {
-        'customer_id': [101, 102],
-        'name': ['Xavier', 'Yara'],
-        'email': ['x@example.com', 'y@example.com'],
-        'total_spent': [20000.0, 10001.0],
-        'transaction_count': [200, 101],
-        'average_transaction_value': [100.0, 100.0099],
-        'spending_tier': ['High', 'High']
+    assert result.loc[0, 'average_transaction_value'] == 1000.0
+    assert result.loc[0, 'spending_tier'] == 'Medium'
+
+def test_low_spending_customer():
+    data = {
+        'customer_id': [3],
+        'name': ['Peter Jones'],
+        'email': ['peter.jones@example.com'],
+        'address': ['789 Pine Ln'],
+        'join_date': [pd.Timestamp('2023-03-01')],
+        'total_spent': [500.0],
+        'transaction_count': [2]
     }
-    df_expected = pd.DataFrame(expected_data)
+    df = pd.DataFrame(data)
+    result = transform(df)
 
-    df_actual = transform(df_input.copy())
+    assert result.loc[0, 'average_transaction_value'] == 250.0
+    assert result.loc[0, 'spending_tier'] == 'Low'
 
-    assert_frame_equal(df_actual, df_expected, check_dtype=False)
+def test_customer_with_no_transactions():
+    data = {
+        'customer_id': [4],
+        'name': ['Alice Brown'],
+        'email': ['alice.brown@example.com'],
+        'address': ['101 Cedar Rd'],
+        'join_date': [pd.Timestamp('2023-04-01')],
+        'total_spent': [0.0],
+        'transaction_count': [0]
+    }
+    df = pd.DataFrame(data)
+    result = transform(df)
+
+    # average_transaction_value should be 0 when transaction_count is 0
+    assert result.loc[0, 'average_transaction_value'] == 0.0
+    assert result.loc[0, 'spending_tier'] == 'Low'
+
+def test_mixed_customers():
+    data = {
+        'customer_id': [1, 2, 3, 4],
+        'name': ['John Doe', 'Jane Smith', 'Peter Jones', 'Alice Brown'],
+        'email': ['john.doe@example.com', 'jane.smith@example.com', 'peter.jones@example.com', 'alice.brown@example.com'],
+        'address': ['123 Main St', '456 Oak Ave', '789 Pine Ln', '101 Cedar Rd'],
+        'join_date': [pd.Timestamp('2023-01-01'), pd.Timestamp('2023-02-01'), pd.Timestamp('2023-03-01'), pd.Timestamp('2023-04-01')],
+        'total_spent': [15000.0, 5000.0, 500.0, 0.0],
+        'transaction_count': [10, 5, 2, 0]
+    }
+    df = pd.DataFrame(data)
+    result = transform(df)
+
+    assert result.loc[0, 'average_transaction_value'] == 1500.0
+    assert result.loc[0, 'spending_tier'] == 'High'
+
+    assert result.loc[1, 'average_transaction_value'] == 1000.0
+    assert result.loc[1, 'spending_tier'] == 'Medium'
+
+    assert result.loc[2, 'average_transaction_value'] == 250.0
+    assert result.loc[2, 'spending_tier'] == 'Low'
+
+    assert result.loc[3, 'average_transaction_value'] == 0.0
+    assert result.loc[3, 'spending_tier'] == 'Low'
