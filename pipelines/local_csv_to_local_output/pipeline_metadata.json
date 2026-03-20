@@ -1,10 +1,10 @@
 {
   "pipeline": "local_csv_to_local_output",
-  "created_at": "2026-03-20T10:06:12.517065+00:00",
+  "created_at": "2026-03-20T10:53:00.692563+00:00",
   "generated_by": "agentic-pipeline v1.0",
   "discovery": {
-    "csv_input": {
-      "source_name": "csv_input",
+    "local_csv_input": {
+      "source_name": "local_csv_input",
       "row_count": 2000,
       "column_count": 10,
       "columns": {
@@ -153,7 +153,7 @@
   "relationship": {
     "join_keys": [],
     "conflicts": [
-      "Non-ISO date format detected: {'csv_input': 'ISO (YYYY-MM-DD)'}"
+      "Non-ISO date format detected: {'local_csv_input': 'ISO (YYYY-MM-DD)'}"
     ]
   },
   "plan": {
@@ -163,41 +163,32 @@
     "layers": {
       "bronze": [
         {
-          "name": "ingest_csv_input",
-          "source": "csv_input"
+          "name": "ingest_local_csv_input",
+          "source": "local_csv_input"
         }
       ],
       "silver": [
         {
-          "name": "transform_opportunities_data",
+          "name": "clean_and_standardize_data",
           "transforms": [
-            "clean_data",
-            "fix_date_formats",
-            "mask_pii_columns"
+            "clean_data_types",
+            "fix_date_formats"
           ]
         }
       ],
       "gold": [
         {
-          "name": "gold_opportunity_summary",
+          "name": "prepare_final_sales_report",
           "aggregations": [
-            "calculate_total_value_by_account_and_stage",
-            "calculate_average_opportunity_amount"
+            "prepare_final_dataset"
           ]
         }
       ]
     },
-    "join_strategy": {},
     "pii_columns": [],
     "date_fixes": [
-      {
-        "column": "close_date",
-        "format": "ISO (YYYY-MM-DD)"
-      },
-      {
-        "column": "transaction_date",
-        "format": "ISO (YYYY-MM-DD)"
-      }
+      "close_date",
+      "transaction_date"
     ],
     "output_target": {
       "type": "local_files",
@@ -206,11 +197,13 @@
     "schedule": "manual"
   },
   "last_run": {
-    "timestamp": "2026-03-20T10:06:12.517065+00:00",
-    "status": "success",
+    "timestamp": "2026-03-20T10:53:00.692563+00:00",
+    "status": "failed",
     "test_results": {
-      "status": "skipped",
-      "note": "pipeline not on disk yet",
+      "status": "unknown",
+      "passed": 0,
+      "failed": 0,
+      "total": 0,
       "credential_check": "passed"
     },
     "pr_url": null
