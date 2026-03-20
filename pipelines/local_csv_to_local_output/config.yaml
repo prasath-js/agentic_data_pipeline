@@ -1,9 +1,9 @@
 pipeline:
   name: local_csv_to_local_output
-  schedule: null
+  schedule: manual
   architecture: medallion
 sources:
-- name: csv_input
+- name: local_csv_input
   type: local_files
   format: ''
   mode: one_time
