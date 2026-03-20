@@ -1,0 +1,14 @@
+pipeline:
+  name: local_csv_to_local_output_pipeline
+  schedule: null
+  architecture: medallion
+sources:
+- name: local_csv_input
+  type: local_files
+  format: ''
+  mode: one_time
+  conn_secret: LOCAL_FILES_CONN
+output:
+  type: local_files
+  conn_secret: LOCAL_FILES_CONN
+pii_columns: []
