@@ -1,85 +1,108 @@
 import os
 import logging
 import pandas as pd
+from typing import Dict, Any
 
+# Configure logging for the module
 logger = logging.getLogger(__name__)
 
-def create_regional_summary(df: pd.DataFrame) -> pd.DataFrame:
+def write_gold_data(silver_df: pd.DataFrame) -> None:
     """
-    Aggregate the silver DataFrame to create a regional summary.
-    Groups by region and status, calculating total amount and order count.
+    Aggregates the Silver layer DataFrame and writes the gold data to local CSV files.
+
+    This function performs aggregations such as calculating total sales and order counts
+    per region and status from the provided silver_df. The aggregated data is then
+    saved into a CSV file in a specified output directory.
 
     Args:
-        df (pd.DataFrame): The cleaned and masked Silver layer DataFrame.
+        silver_df (pd.DataFrame): The DataFrame processed by the Silver layer,
+                                  containing cleaned and transformed data.
+                                  Expected columns include 'region', 'status', 'amount'.
 
     Returns:
-        pd.DataFrame: Aggregated Gold layer DataFrame.
+        None: The function writes data to local files and does not return any value.
     """
-    logger.info("Aggregating silver data to generate regional sales summary.")
+    if silver_df.empty:
+        logger.warning("Silver DataFrame is empty. No Gold data to aggregate or write.")
+        return
+
+    logger.info("Starting Gold layer aggregation and writing to local files.")
+
     try:
-        if df.empty:
-            logger.warning("Empty DataFrame received for aggregation.")
-            return pd.DataFrame()
+        # Define output directory from environment variables
+        gold_output_dir = os.getenv("GOLD_LOCAL_FILES_OUTPUT_DIR", "./data/gold")
+        os.makedirs(gold_output_dir, exist_ok=True)
+        gold_output_path = os.path.join(gold_output_dir, "aggregated_orders.csv")
 
-        # Convert amount to numeric to avoid aggregation errors
-        df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0)
+        logger.info(f"Aggregating data to generate gold output. Output path: {gold_output_path}")
 
-        # Aggregate: Total amount and count of orders per region and status
-        agg_df = df.groupby(['region', 'status'], dropna=False).agg(
+        # Ensure 'order_date' is datetime for potential time-based aggregations, though not explicitly used below
+        if 'order_date' in silver_df.columns:
+            silver_df['order_date'] = pd.to_datetime(silver_df['order_date'], errors='coerce')
+
+        # Example Aggregation 1: Total amount and order count per region
+        region_aggregation = silver_df.groupby('region').agg(
             total_amount=('amount', 'sum'),
-            order_count=('order_id', 'count')
+            number_of_orders=('order_id', 'nunique')
         ).reset_index()
+        region_aggregation.rename(columns={'region': 'Region'}, inplace=True)
+        logger.info("Aggregated total amount and order count per region.")
 
-        logger.info("Aggregation complete. Generated %d summary rows.", len(agg_df))
-        return agg_df
+        # Example Aggregation 2: Total amount and order count per status
+        status_aggregation = silver_df.groupby('status').agg(
+            total_amount=('amount', 'sum'),
+            number_of_orders=('order_id', 'nunique')
+        ).reset_index()
+        status_aggregation.rename(columns={'status': 'OrderStatus'}, inplace=True)
+        logger.info("Aggregated total amount and order count per status.")
+
+        # Example Aggregation 3: Total amount and order count per region and status
+        region_status_aggregation = silver_df.groupby(['region', 'status']).agg(
+            total_amount=('amount', 'sum'),
+            number_of_orders=('order_id', 'nunique')
+        ).reset_index()
+        region_status_aggregation.rename(columns={'region': 'Region', 'status': 'OrderStatus'}, inplace=True)
+        logger.info("Aggregated total amount and order count per region and status.")
+
+        # For this specific pipeline, let's write the region_status_aggregation as the primary gold output
+        final_gold_df = region_status_aggregation
+
+        # Write the aggregated DataFrame to a local CSV file
+        final_gold_df.to_csv(gold_output_path, index=False)
+        logger.info(f"Successfully wrote aggregated gold data to {gold_output_path}")
+
+    except KeyError as e:
+        logger.error(f"Missing expected column for aggregation: {e}. Please check Silver layer output.")
+        raise
     except Exception as e:
-        logger.error("Error during aggregation: %s", str(e))
+        logger.error(f"An unexpected error occurred during Gold layer processing: {e}")
         raise
 
-def save_gold_data(df: pd.DataFrame, output_filename: str) -> str:
-    """
-    Save the aggregated Gold DataFrame to a local file.
-    
-    Args:
-        df (pd.DataFrame): The aggregated Gold DataFrame.
-        output_filename (str): Name of the file to be saved.
-        
-    Returns:
-        str: The full path where the file was saved.
-    """
-    output_dir = os.getenv("GOLD_OUTPUT_DIR", "data/gold")
-    
+if __name__ == '__main__':
+    # This block is for demonstrating the gold layer in isolation if needed for debugging.
+    # In a real pipeline, `write_gold_data` would be called from main.py.
+    # Set up a dummy DataFrame for testing
+    logging.basicConfig(level=logging.INFO) # Basic logging setup for standalone run
+    logger.info("Running gold_local_files.py in standalone test mode.")
+
+    # Mock Silver DataFrame
+    mock_silver_data = {
+        'order_id': ['O1', 'O2', 'O3', 'O4', 'O5', 'O6'],
+        'customer_id': ['C1', 'C2', 'C1', 'C3', 'C2', 'C4'],
+        'customer_name': ['***MASKED***', '***MASKED***', '***MASKED***', '***MASKED***', '***MASKED***', '***MASKED***'],
+        'email': ['***MASKED***', '***MASKED***', '***MASKED***', '***MASKED***', '***MASKED***', '***MASKED***'],
+        'amount': [100.0, 250.5, 120.0, 300.0, 50.0, 180.0],
+        'status': ['completed', 'pending', 'completed', 'cancelled', 'completed', 'pending'],
+        'region': ['north', 'south', 'north', 'east', 'west', 'north'],
+        'order_date': ['2023-01-01', '2023-01-02', '2023-01-01', '2023-01-03', '2023-01-04', '2023-01-02']
+    }
+    mock_silver_df = pd.DataFrame(mock_silver_data)
+
+    # Set a dummy output directory for testing
+    os.environ["GOLD_LOCAL_FILES_OUTPUT_DIR"] = "./data/gold_test_output"
+
     try:
-        os.makedirs(output_dir, exist_ok=True)
-        file_path = os.path.join(output_dir, output_filename)
-        
-        logger.info("Saving gold data to %s", file_path)
-        df.to_csv(file_path, index=False)
-        logger.info("Gold data saved successfully.")
-        
-        return file_path
+        write_gold_data(mock_silver_df)
+        logger.info("Standalone Gold layer test completed successfully.")
     except Exception as e:
-        logger.error("Failed to save gold data to local files: %s", str(e))
-        raise
-
-def process_gold(silver_df: pd.DataFrame) -> None:
-    """
-    Process the Silver data to generate and save Gold layer outputs.
-
-    Args:
-        silver_df (pd.DataFrame): Cleaned and transformed data from the Silver layer.
-    """
-    logger.info("Starting Gold layer processing.")
-    
-    try:
-        regional_summary_df = create_regional_summary(silver_df)
-        
-        if not regional_summary_df.empty:
-            save_gold_data(regional_summary_df, "regional_sales_summary.csv")
-        else:
-            logger.warning("No data to save for Gold layer.")
-            
-        logger.info("Gold layer processing completed successfully.")
-    except Exception as e:
-        logger.error("Gold layer processing failed: %s", str(e))
-        raise
+        logger.error(f"Standalone Gold layer test failed: {e}")

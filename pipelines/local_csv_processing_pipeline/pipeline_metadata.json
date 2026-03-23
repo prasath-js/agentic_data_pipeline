@@ -1,10 +1,10 @@
 {
   "pipeline": "local_csv_processing_pipeline",
-  "created_at": "2026-03-23T10:35:07.200914+00:00",
+  "created_at": "2026-03-23T10:07:31.023216+00:00",
   "generated_by": "agentic-pipeline v1.0",
   "discovery": {
-    "input_folder": {
-      "source_name": "input_folder",
+    "local_csv_data": {
+      "source_name": "local_csv_data",
       "row_count": 10,
       "column_count": 8,
       "columns": {
@@ -150,8 +150,8 @@
   "relationship": {
     "join_keys": [],
     "conflicts": [
-      "Non-ISO date format detected: {'input_folder': 'DD/MM/YYYY'}",
-      "PII detected in input_folder: ['customer_name', 'email'] \u2014 will be masked in Silver"
+      "Non-ISO date format detected: {'local_csv_data': 'DD/MM/YYYY'}",
+      "PII detected in local_csv_data: ['customer_name', 'email'] \u2014 will be masked in Silver"
     ]
   },
   "plan": {
@@ -160,42 +160,159 @@
     "technology": "Pandas + SQLAlchemy",
     "layers": {
       "bronze": {
-        "description": "Raw data ingestion layer",
-        "actions": [
-          "Ingest batch data from input_folder (local_files) without modification",
-          "Save raw state"
-        ]
+        "name": "bronze_local_csv_data",
+        "description": "Raw ingestion of local CSV data.",
+        "source": {
+          "name": "local_csv_data",
+          "type": "local_files",
+          "auth_type": "n/a"
+        },
+        "operations": [
+          "Load raw data from local CSV files."
+        ],
+        "target": {
+          "type": "dataframe",
+          "schema": [
+            {
+              "name": "order_id",
+              "type": "object"
+            },
+            {
+              "name": "customer_id",
+              "type": "object"
+            },
+            {
+              "name": "customer_name",
+              "type": "object"
+            },
+            {
+              "name": "email",
+              "type": "object"
+            },
+            {
+              "name": "amount",
+              "type": "object"
+            },
+            {
+              "name": "status",
+              "type": "object"
+            },
+            {
+              "name": "region",
+              "type": "object"
+            },
+            {
+              "name": "order_date",
+              "type": "object"
+            }
+          ]
+        }
       },
       "silver": {
-        "description": "Data cleansing, standardization, and security layer",
-        "actions": [
-          "Mask PII columns: 'customer_name' and 'email'",
-          "Standardize 'order_date' format: convert from 'DD/MM/YYYY' to ISO format (YYYY-MM-DD)",
-          "Deduplicate records",
-          "Handle missing values"
-        ]
+        "name": "silver_cleaned_data",
+        "description": "Cleaned and refined data, PII masked, date formats standardized.",
+        "source": "bronze_local_csv_data",
+        "operations": [
+          "Mask PII columns: 'customer_name', 'email'.",
+          "Standardize 'order_date' column from 'DD/MM/YYYY' format to ISO format (YYYY-MM-DD)."
+        ],
+        "target": {
+          "type": "dataframe",
+          "schema": [
+            {
+              "name": "order_id",
+              "type": "object"
+            },
+            {
+              "name": "customer_id",
+              "type": "object"
+            },
+            {
+              "name": "customer_name",
+              "type": "string_masked"
+            },
+            {
+              "name": "email",
+              "type": "string_masked"
+            },
+            {
+              "name": "amount",
+              "type": "object"
+            },
+            {
+              "name": "status",
+              "type": "object"
+            },
+            {
+              "name": "region",
+              "type": "object"
+            },
+            {
+              "name": "order_date",
+              "type": "datetime"
+            }
+          ]
+        }
       },
       "gold": {
-        "description": "Business-level aggregation and presentation layer",
-        "actions": [
-          "Select required finalized columns",
-          "Write curated output to the output_target folder"
-        ]
+        "name": "gold_final_data",
+        "description": "Final dataset ready for consumption.",
+        "source": "silver_cleaned_data",
+        "operations": [
+          "Select all columns from the silver layer for final output."
+        ],
+        "target": {
+          "type": "dataframe",
+          "schema": [
+            {
+              "name": "order_id",
+              "type": "object"
+            },
+            {
+              "name": "customer_id",
+              "type": "object"
+            },
+            {
+              "name": "customer_name",
+              "type": "string_masked"
+            },
+            {
+              "name": "email",
+              "type": "string_masked"
+            },
+            {
+              "name": "amount",
+              "type": "object"
+            },
+            {
+              "name": "status",
+              "type": "object"
+            },
+            {
+              "name": "region",
+              "type": "object"
+            },
+            {
+              "name": "order_date",
+              "type": "datetime"
+            }
+          ]
+        }
       }
     },
-    "join_strategy": "none",
+    "join_strategy": [],
     "pii_columns": [
       "customer_name",
       "email"
     ],
     "output_target": {
-      "name": "output_folder",
-      "type": "local_files"
+      "type": "local_files",
+      "format": "csv"
     },
     "schedule": "manual"
   },
   "last_run": {
-    "timestamp": "2026-03-23T10:35:07.200914+00:00",
+    "timestamp": "2026-03-23T10:07:31.023216+00:00",
     "status": "failed",
     "test_results": {
       "status": "failed",

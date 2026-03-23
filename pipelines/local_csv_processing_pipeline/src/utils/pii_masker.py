@@ -1,38 +1,73 @@
-import logging
 import pandas as pd
+import logging
 from typing import List
 
+# Configure logger for this module
 logger = logging.getLogger(__name__)
 
 def mask_pii_columns(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
     """
-    Masks Personally Identifiable Information (PII) columns in a DataFrame.
-    
-    Replaces all values in the specified PII columns with '***MASKED***'.
-    Logs the columns that were successfully masked.
+    Masks specified PII columns in a DataFrame by replacing their values with '***MASKED***'.
 
     Args:
-        df (pd.DataFrame): The input DataFrame containing potential PII data.
-        columns (List[str]): A list of column names to be masked.
+        df (pd.DataFrame): The input DataFrame containing data, potentially with PII.
+        columns (List[str]): A list of column names in the DataFrame that contain PII
+                              and need to be masked.
 
     Returns:
-        pd.DataFrame: A DataFrame with the specified columns masked.
+        pd.DataFrame: A new DataFrame with the specified PII columns masked.
+                      Returns the original DataFrame if no columns are specified or found.
     """
-    logger.info("Starting PII masking process.")
-    
-    df_masked = df.copy()
-    masked_cols = []
+    if not columns:
+        logger.info("No PII columns specified for masking. Returning original DataFrame.")
+        return df.copy()
 
+    df_masked = df.copy()
+    masked_count = 0
     for col in columns:
         if col in df_masked.columns:
             df_masked[col] = "***MASKED***"
-            masked_cols.append(col)
+            logger.info(f"Column '{col}' has been masked.")
+            masked_count += 1
         else:
-            logger.warning("Column '%s' not found in DataFrame. Skipping masking for this column.", col)
+            logger.warning(f"PII column '{col}' not found in DataFrame. Skipping masking for this column.")
 
-    if masked_cols:
-        logger.info("Successfully masked PII columns: %s", ", ".join(masked_cols))
+    if masked_count > 0:
+        logger.info(f"Successfully masked {masked_count} PII column(s) in the DataFrame.")
     else:
-        logger.info("No PII columns were masked.")
+        logger.warning("No specified PII columns were found in the DataFrame to mask.")
 
     return df_masked
+
+if __name__ == '__main__':
+    # Example usage for testing purposes
+    # Set up basic logging for standalone execution
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+    data = {
+        'order_id': [1, 2, 3],
+        'customer_id': ['C001', 'C002', 'C003'],
+        'customer_name': ['Alice Smith', 'Bob Johnson', 'Charlie Brown'],
+        'email': ['alice@example.com', 'bob@example.com', 'charlie@example.com'],
+        'amount': [100.50, 200.75, 50.00]
+    }
+    sample_df = pd.DataFrame(data)
+
+    logger.info("Original DataFrame:")
+    logger.info(sample_df)
+
+    pii_columns_to_mask = ["customer_name", "email"]
+    masked_df = mask_pii_columns(sample_df, pii_columns_to_mask)
+
+    logger.info("\nDataFrame after PII masking:")
+    logger.info(masked_df)
+
+    # Test with non-existent columns
+    logger.info("\nTesting with non-existent columns:")
+    masked_df_non_existent = mask_pii_columns(sample_df.copy(), ["non_existent_col", "email"])
+    logger.info(masked_df_non_existent)
+
+    # Test with empty column list
+    logger.info("\nTesting with empty column list:")
+    masked_df_empty_list = mask_pii_columns(sample_df.copy(), [])
+    logger.info(masked_df_empty_list)

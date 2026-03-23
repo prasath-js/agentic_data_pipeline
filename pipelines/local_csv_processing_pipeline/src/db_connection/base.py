@@ -1,45 +1,43 @@
-import abc
-import logging
+from abc import ABC, abstractmethod
 import pandas as pd
 
 
-class BaseConnector(abc.ABC):
+class BaseConnector(ABC):
     """
     Abstract base class for all data connectors.
-    
-    Enforces a standard interface for reading and writing data across 
-    the bronze, silver, and gold layers of the pipeline.
+
+    Defines the common interface for reading and writing data
+    from various sources and targets.
     """
 
-    def __init__(self) -> None:
-        """
-        Initializes the base connector and sets up the class-specific logger.
-        """
-        self.logger = logging.getLogger(self.__class__.__name__)
-
-    @abc.abstractmethod
+    @abstractmethod
     def read(self, **kwargs) -> pd.DataFrame:
         """
-        Reads data from the source and returns it as a pandas DataFrame.
+        Abstract method to read data from a source.
+
+        All concrete connector implementations must provide an
+        implementation for this method.
 
         Args:
-            **kwargs: Connector-specific read arguments (e.g., file_path, query, table_name).
+            **kwargs: Arbitrary keyword arguments specific to the connector
+                      and the read operation (e.g., file path, table name, query).
 
         Returns:
-            pd.DataFrame: The extracted raw data.
+            pd.DataFrame: A DataFrame containing the read data.
         """
-        pass
+        raise NotImplementedError
 
-    @abc.abstractmethod
+    @abstractmethod
     def write(self, df: pd.DataFrame, **kwargs) -> None:
         """
-        Writes a pandas DataFrame to the target destination.
+        Abstract method to write data to a target.
+
+        All concrete connector implementations must provide an
+        implementation for this method.
 
         Args:
-            df (pd.DataFrame): The data to be written.
-            **kwargs: Connector-specific write arguments (e.g., file_path, table_name, mode).
-
-        Returns:
-            None
+            df (pd.DataFrame): The DataFrame to write.
+            **kwargs: Arbitrary keyword arguments specific to the connector
+                      and the write operation (e.g., file path, table name, mode).
         """
-        pass
+        raise NotImplementedError
