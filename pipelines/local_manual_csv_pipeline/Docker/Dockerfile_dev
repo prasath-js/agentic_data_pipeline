@@ -1,0 +1,10 @@
+FROM pipeline-base:latest
+
+ENV ENVIRONMENT=development
+ENV PYTHONPATH=/app
+
+WORKDIR /app
+
+COPY . .
+
+CMD ["python", "src/main.py"]

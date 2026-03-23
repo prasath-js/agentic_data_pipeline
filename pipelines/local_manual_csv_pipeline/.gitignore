@@ -1,0 +1,30 @@
+```gitignore
+# Environments
+.env
+.venv/
+env/
+venv/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs
+logs/*.log
+
+# Data
+data/output/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+```
