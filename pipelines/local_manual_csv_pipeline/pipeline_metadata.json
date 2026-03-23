@@ -1,0 +1,208 @@
+{
+  "pipeline": "local_manual_csv_pipeline",
+  "created_at": "2026-03-23T11:44:05.350713+00:00",
+  "generated_by": "agentic-pipeline v1.0",
+  "discovery": {
+    "input_folder": {
+      "source_name": "input_folder",
+      "row_count": 10,
+      "column_count": 8,
+      "columns": {
+        "order_id": {
+          "dtype": "str",
+          "null_count": 0,
+          "null_rate": 0.0,
+          "distinct_count": 10,
+          "top_values": {
+            "ORD001": 1,
+            "ORD002": 1,
+            "ORD003": 1,
+            "ORD004": 1,
+            "ORD005": 1
+          }
+        },
+        "customer_id": {
+          "dtype": "str",
+          "null_count": 0,
+          "null_rate": 0.0,
+          "distinct_count": 6,
+          "top_values": {
+            "CUST001": 3,
+            "CUST002": 2,
+            "CUST003": 2,
+            "CUST004": 1,
+            "CUST005": 1
+          }
+        },
+        "customer_name": {
+          "dtype": "str",
+          "null_count": 0,
+          "null_rate": 0.0,
+          "distinct_count": 6,
+          "top_values": {
+            "John Doe": 3,
+            "Jane Smith": 2,
+            "Bob Johnson": 2,
+            "Alice Brown": 1,
+            "Charlie Wilson": 1
+          }
+        },
+        "email": {
+          "dtype": "str",
+          "null_count": 0,
+          "null_rate": 0.0,
+          "distinct_count": 6,
+          "top_values": {
+            "john@example.com": 3,
+            "jane@example.com": 2,
+            "bob@example.com": 2,
+            "alice@example.com": 1,
+            "charlie@example.com": 1
+          }
+        },
+        "amount": {
+          "dtype": "float64",
+          "null_count": 0,
+          "null_rate": 0.0,
+          "min": 0.0,
+          "max": 450.0,
+          "avg": 210.55
+        },
+        "status": {
+          "dtype": "str",
+          "null_count": 0,
+          "null_rate": 0.0,
+          "distinct_count": 5,
+          "top_values": {
+            "delivered": 4,
+            "pending": 2,
+            "shipped": 2,
+            "cancelled": 1,
+            "failed": 1
+          }
+        },
+        "region": {
+          "dtype": "str",
+          "null_count": 0,
+          "null_rate": 0.0,
+          "distinct_count": 4,
+          "top_values": {
+            "North": 4,
+            "South": 2,
+            "East": 2,
+            "West": 2
+          }
+        },
+        "order_date": {
+          "dtype": "str",
+          "null_count": 0,
+          "null_rate": 0.0,
+          "distinct_count": 10,
+          "top_values": {
+            "15/01/2025": 1,
+            "20/01/2025": 1,
+            "25/01/2025": 1,
+            "01/02/2025": 1,
+            "05/02/2025": 1
+          },
+          "date_format": "DD/MM/YYYY"
+        }
+      },
+      "pii_detected": [
+        "customer_name",
+        "email"
+      ],
+      "incremental_col": null,
+      "sample_rows": [
+        {
+          "order_id": "ORD001",
+          "customer_id": "CUST001",
+          "customer_name": "***MASKED***",
+          "email": "***MASKED***",
+          "amount": 150.0,
+          "status": "delivered",
+          "region": "North",
+          "order_date": "15/01/2025"
+        },
+        {
+          "order_id": "ORD002",
+          "customer_id": "CUST002",
+          "customer_name": "***MASKED***",
+          "email": "***MASKED***",
+          "amount": 250.5,
+          "status": "pending",
+          "region": "South",
+          "order_date": "20/01/2025"
+        },
+        {
+          "order_id": "ORD003",
+          "customer_id": "CUST003",
+          "customer_name": "***MASKED***",
+          "email": "***MASKED***",
+          "amount": 75.0,
+          "status": "shipped",
+          "region": "East",
+          "order_date": "25/01/2025"
+        }
+      ]
+    }
+  },
+  "relationship": {
+    "join_keys": [],
+    "conflicts": [
+      "Non-ISO date format detected: {'input_folder': 'DD/MM/YYYY'}",
+      "PII detected in input_folder: ['customer_name', 'email'] \u2014 will be masked in Silver"
+    ]
+  },
+  "plan": {
+    "pipeline_name": "local_manual_csv_pipeline",
+    "architecture": "medallion",
+    "technology": "Pandas + SQLAlchemy",
+    "layers": {
+      "bronze": {
+        "description": "Raw data ingestion layer",
+        "actions": [
+          "Read raw CSV files from input_folder",
+          "Load data as-is without modification",
+          "Add pipeline metadata (e.g., ingestion_timestamp)"
+        ]
+      },
+      "silver": {
+        "description": "Data cleansing and standardization layer",
+        "actions": [
+          "Mask PII columns ('customer_name', 'email') using a hashing or redaction function",
+          "Parse 'order_date' from 'DD/MM/YYYY' format and standardize to ISO 8601 format",
+          "Enforce data types for numeric columns like 'amount' and validate statuses"
+        ]
+      },
+      "gold": {
+        "description": "Business-level aggregations and reporting layer",
+        "actions": [
+          "Group data by 'region' and 'status'",
+          "Calculate aggregations such as total 'amount' and order counts",
+          "Write final business-ready dataset to output_folder"
+        ]
+      }
+    },
+    "join_strategy": "none",
+    "pii_columns": [
+      "customer_name",
+      "email"
+    ],
+    "output_target": {
+      "name": "output_folder",
+      "type": "local_files"
+    },
+    "schedule": "manual"
+  },
+  "last_run": {
+    "timestamp": "2026-03-23T11:44:05.350713+00:00",
+    "status": "failed",
+    "test_results": {
+      "status": "failed",
+      "credential_check": "failed",
+      "code_review": "failed"
+    },
+    "pr_url": null
+  }
+}
