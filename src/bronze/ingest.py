@@ -1,90 +1,98 @@
 import os
 import logging
 import pandas as pd
+from datetime import datetime
 from typing import Dict, Any
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def load_csv(file_path: str, source_name: str) -> pd.DataFrame:
+def read_csv_source(source_path: str) -> pd.DataFrame:
     """
-    Loads data from a CSV file into a pandas DataFrame.
+    Reads data from a CSV file.
 
     Args:
-        file_path (str): The path to the CSV file.
-        source_name (str): The name of the source (for logging purposes).
+        source_path (str): The file path to the CSV source.
 
     Returns:
-        pd.DataFrame: The loaded data.
-
-    Raises:
-        FileNotFoundError: If the specified file does not exist.
-        pd.errors.EmptyDataError: If the specified file is empty.
-        Exception: For other errors during CSV reading.
+        pd.DataFrame: A pandas DataFrame containing the raw data.
     """
-    logger.info(f"Attempting to load data from CSV source: '{source_name}' at '{file_path}'")
     try:
-        df = pd.read_csv(file_path)
-        logger.info(f"Successfully loaded {len(df)} rows from '{source_name}'.")
+        df = pd.read_csv(source_path)
+        logger.info(f"Successfully read CSV from {source_path}. Rows read: {len(df)}")
         return df
     except FileNotFoundError:
-        logger.error(f"Error: CSV file not found at '{file_path}' for source '{source_name}'.")
+        logger.error(f"CSV source file not found at {source_path}.")
         raise
-    except pd.errors.EmptyDataError:
-        logger.warning(f"Warning: CSV file '{file_path}' for source '{source_name}' is empty.")
-        return pd.DataFrame()
     except Exception as e:
-        logger.error(f"An unexpected error occurred while reading CSV for source '{source_name}' at '{file_path}': {e}")
+        logger.error(f"Error reading CSV from {source_path}: {e}")
         raise
 
-def write_parquet(df: pd.DataFrame, output_path: str, source_name: str) -> None:
+def write_parquet_to_staging(df: pd.DataFrame, staging_path: str, file_name: str) -> None:
     """
-    Writes a pandas DataFrame to a Parquet file.
+    Writes a pandas DataFrame to a Parquet file in the staging area.
 
     Args:
         df (pd.DataFrame): The DataFrame to write.
-        output_path (str): The full path to the output Parquet file.
-        source_name (str): The name of the source (for logging purposes).
-
-    Raises:
-        Exception: For errors during Parquet writing.
+        staging_path (str): The base directory for the staging area.
+        file_name (str): The name of the Parquet file (e.g., "sales.parquet").
     """
-    logger.info(f"Attempting to write {len(df)} rows to Parquet for source '{source_name}' at '{output_path}'")
+    full_path = os.path.join(staging_path, file_name)
+    os.makedirs(staging_path, exist_ok=True)
     try:
-        df.to_parquet(output_path, index=False)
-        logger.info(f"Successfully wrote data for source '{source_name}' to '{output_path}'.")
+        df.to_parquet(full_path, index=False)
+        logger.info(f"Successfully wrote {len(df)} rows to Parquet at {full_path}")
     except Exception as e:
-        logger.error(f"An error occurred while writing Parquet for source '{source_name}' to '{output_path}': {e}")
+        logger.error(f"Error writing Parquet to {full_path}: {e}")
         raise
 
 def main() -> None:
     """
     Main function for the Bronze layer ingestion.
-    Reads raw data from various sources and writes it to a Parquet staging area.
+    Reads raw data from various sources and writes it to a staging area
+    as Parquet files.
     """
     logger.info("Starting Bronze layer ingestion for sales_pipeline.")
 
-    # Configuration from environment variables
-    BRONZE_STAGING_PATH = os.getenv('BRONZE_STAGING_PATH', './data/bronze')
-    SALES_CSV_PATH = os.getenv('SALES_CSV_PATH', './data/raw/sales.csv')
+    # Configuration from environment variables or default values
+    # Staging area for bronze layer
+    BRONZE_STAGING_PATH = os.getenv("BRONZE_STAGING_PATH", "data/bronze")
+    
+    # Source paths
+    SALES_SOURCE_PATH = os.getenv("SALES_SOURCE_PATH", "data/raw/sales.csv")
 
-    # Ensure the bronze staging directory exists
-    os.makedirs(BRONZE_STAGING_PATH, exist_ok=True)
-    logger.info(f"Bronze staging path set to: {BRONZE_STAGING_PATH}")
+    source_configs: Dict[str, Dict[str, Any]] = {
+        "sales": {
+            "type": "csv",
+            "path": SALES_SOURCE_PATH,
+            "output_file": "sales.parquet"
+        }
+    }
 
-    # --- Ingest Sales Data (CSV) ---
-    source_name_sales = "sales"
-    sales_output_filename = os.path.join(BRONZE_STAGING_PATH, f"{source_name_sales}_raw.parquet")
+    current_date = datetime.now().strftime("%Y%m%d")
+    bronze_output_dir = os.path.join(BRONZE_STAGING_PATH, f"sales_pipeline/{current_date}")
 
-    try:
-        sales_df = load_csv(SALES_CSV_PATH, source_name_sales)
-        if not sales_df.empty:
-            write_parquet(sales_df, sales_output_filename, source_name_sales)
-        else:
-            logger.warning(f"No data to write for source '{source_name_sales}' as the DataFrame is empty.")
-    except Exception as e:
-        logger.error(f"Failed to ingest sales data: {e}")
+    for source_name, config in source_configs.items():
+        logger.info(f"Processing source: {source_name}")
+        df: pd.DataFrame = pd.DataFrame()
+        try:
+            if config["type"] == "csv":
+                df = read_csv_source(config["path"])
+            else:
+                logger.warning(f"Unsupported source type '{config['type']}' for {source_name}. Skipping.")
+                continue
+
+            if not df.empty:
+                write_parquet_to_staging(df, bronze_output_dir, config["output_file"])
+            else:
+                logger.warning(f"No data ingested for source {source_name}. DataFrame is empty.")
+
+        except Exception as e:
+            logger.error(f"Failed to ingest data for source {source_name}: {e}")
+            # Depending on policy, decide whether to re-raise or continue
+            # For bronze, we often want to fail fast if a critical source fails
+            raise
 
     logger.info("Bronze layer ingestion completed for sales_pipeline.")
 

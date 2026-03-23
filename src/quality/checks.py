@@ -1,356 +1,424 @@
 import logging
 import os
 import pandas as pd
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+import json
 
+# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class DataQualityChecker:
     """
-    Performs data quality checks across different layers of the sales pipeline.
-
-    This class provides methods to validate row counts, null rates, and schema consistency
-    between Bronze, Silver, and Gold layers of a data pipeline.
+    Performs data quality checks across different layers of the sales_pipeline.
+    Validates row counts, null rates, and schema consistency.
     """
 
     def __init__(self, config: Dict[str, Any]):
         """
-        Initializes the DataQualityChecker with configuration.
+        Initializes the DataQualityChecker with pipeline configuration.
 
         Args:
             config (Dict[str, Any]): A dictionary containing configuration parameters
-                                     like staging directories.
+                                     such as data paths and expected schemas.
         """
         self.config = config
-        self.bronze_staging_dir = config.get('bronze_staging_dir', './data/bronze/sales_pipeline')
-        self.silver_staging_dir = config.get('silver_staging_dir', './data/silver/sales_pipeline')
-        self.gold_output_dir = config.get('gold_output_dir', './data/gold/sales_pipeline')
+        self.report_path = config.get("report_path", "data_quality_report.json")
+        logger.info("DataQualityChecker initialized with configuration.")
 
-    def _load_data(self, file_path: str) -> pd.DataFrame:
+    def _load_data(self, file_path: str) -> Optional[pd.DataFrame]:
         """
-        Loads data from a Parquet file.
+        Loads a Parquet file into a pandas DataFrame.
 
         Args:
             file_path (str): The path to the Parquet file.
 
         Returns:
-            pd.DataFrame: The loaded DataFrame.
-
-        Raises:
-            FileNotFoundError: If the file does not exist.
-            Exception: For other errors during file loading.
+            Optional[pd.DataFrame]: The loaded DataFrame, or None if an error occurs.
         """
         try:
+            logger.info(f"Attempting to load data from: {file_path}")
             df = pd.read_parquet(file_path)
-            logger.info(f"Successfully loaded data from {file_path}")
+            logger.info(f"Successfully loaded {len(df)} rows from {file_path}")
             return df
         except FileNotFoundError:
             logger.error(f"File not found: {file_path}")
-            raise
-        except Exception as e:
+            return None
+        except (pd.errors.ParserError, OSError, ValueError) as e: # Specific exceptions for file loading
             logger.error(f"Error loading data from {file_path}: {e}")
-            raise
+            return None
 
-    def check_row_counts(self, bronze_file: str, silver_file: str, gold_file: str) -> bool:
+    def check_row_counts(
+        self,
+        bronze_df: Optional[pd.DataFrame],
+        silver_df: Optional[pd.DataFrame],
+        gold_df: Optional[pd.DataFrame]
+    ) -> Dict[str, Any]:
         """
-        Validates row counts between Bronze, Silver, and Gold layers.
-
-        Compares row counts to ensure data integrity during transformations.
-        Expects Bronze and Silver to have similar counts, and Gold to be
-        potentially aggregated (lower count).
+        Compares row counts between Bronze, Silver, and Gold layers.
 
         Args:
-            bronze_file (str): Filename for the bronze layer data.
-            silver_file (str): Filename for the silver layer data.
-            gold_file (str): Filename for the gold layer data.
+            bronze_df (Optional[pd.DataFrame]): DataFrame from the Bronze layer.
+            silver_df (Optional[pd.DataFrame]): DataFrame from the Silver layer.
+            gold_df (Optional[pd.DataFrame]): DataFrame from the Gold layer.
 
         Returns:
-            bool: True if row count checks pass, False otherwise.
+            Dict[str, Any]: A dictionary containing the results of row count checks.
         """
-        logger.info("Starting row count checks...")
-        bronze_df = None
-        silver_df = None
-        gold_df = None
+        results = {}
+        bronze_rows = len(bronze_df) if bronze_df is not None else 0
+        silver_rows = len(silver_df) if silver_df is not None else 0
+        gold_rows = len(gold_df) if gold_df is not None else 0
 
-        try:
-            bronze_df = self._load_data(os.path.join(self.bronze_staging_dir, bronze_file))
-            silver_df = self._load_data(os.path.join(self.silver_staging_dir, silver_file))
-            gold_df = self._load_data(os.path.join(self.gold_output_dir, gold_file))
+        results["bronze_row_count"] = bronze_rows
+        results["silver_row_count"] = silver_rows
+        results["gold_row_count"] = gold_rows
 
-            bronze_count = len(bronze_df)
-            silver_count = len(silver_df)
-            gold_count = len(gold_df)
-
-            logger.info(f"Bronze layer row count: {bronze_count}")
-            logger.info(f"Silver layer row count: {silver_count}")
-            logger.info(f"Gold layer row count: {gold_count}")
-
-            # Bronze to Silver check: Expect similar counts, Silver might have fewer due to filtering/deduplication
-            # For 'sales_pipeline' with no explicit filtering, expect similar counts
-            if abs(bronze_count - silver_count) > bronze_count * 0.05: # Allow up to 5% difference
-                logger.warning(f"Row count mismatch between Bronze ({bronze_count}) and Silver ({silver_count}). Difference is significant.")
-                # Depending on pipeline, this might be a failure. For now, just warn.
+        # Bronze to Silver check (deduplication)
+        check_bs_pass = True
+        if bronze_df is not None and silver_df is not None:
+            if silver_rows <= bronze_rows:
+                logger.info(f"Bronze-Silver row count check passed: {silver_rows} <= {bronze_rows}")
             else:
-                logger.info("Bronze to Silver row count check passed (within 5% tolerance).")
-
-            # Silver to Gold check: Expect Gold count to be less or equal due to aggregation
-            if gold_count > silver_count:
-                logger.error(f"Gold layer row count ({gold_count}) is greater than Silver layer row count ({silver_count}). This indicates a potential issue with aggregation.")
-                return False
-            else:
-                logger.info("Silver to Gold row count check passed (Gold count is less than or equal to Silver).")
-
-            logger.info("Row count checks completed.")
-            return True
-        except FileNotFoundError as e:
-            logger.error(f"One or more files not found for row count check: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"An error occurred during row count checks: {e}")
-            return False
-
-    def check_null_rates(self, file_path: str, critical_columns: List[str], max_null_rate: float = 0.01) -> bool:
-        """
-        Checks for excessive null values in critical columns of a given dataset.
-
-        Args:
-            file_path (str): The full path to the Parquet file to check.
-            critical_columns (List[str]): A list of column names considered critical.
-            max_null_rate (float): The maximum allowed null rate (e.g., 0.01 for 1%).
-
-        Returns:
-            bool: True if null rates are within limits for critical columns, False otherwise.
-        """
-        logger.info(f"Starting null rate checks for {file_path} on columns: {critical_columns}")
-        df = None
-        try:
-            df = self._load_data(file_path)
-
-            passed = True
-            for col in critical_columns:
-                if col not in df.columns:
-                    logger.warning(f"Critical column '{col}' not found in {file_path}. Skipping null check for this column.")
-                    continue
-
-                null_count = df[col].isnull().sum()
-                row_count = len(df)
-                if row_count == 0:
-                    logger.warning(f"File {file_path} is empty. Cannot perform null rate check for column '{col}'.")
-                    continue
-
-                null_rate = null_count / row_count
-                logger.info(f"Column '{col}' in {os.path.basename(file_path)}: Null count={null_count}, Null rate={null_rate:.4f}")
-
-                if null_rate > max_null_rate:
-                    logger.error(f"Null rate for column '{col}' ({null_rate:.4f}) exceeds maximum allowed ({max_null_rate:.4f}) in {os.path.basename(file_path)}.")
-                    passed = False
-            
-            if passed:
-                logger.info(f"Null rate checks passed for critical columns in {os.path.basename(file_path)}.")
-            else:
-                logger.warning(f"Null rate checks failed for one or more critical columns in {os.path.basename(file_path)}.")
-            return passed
-        except FileNotFoundError as e:
-            logger.error(f"File not found for null rate check: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"An error occurred during null rate checks for {file_path}: {e}")
-            return False
-
-    def check_schema_consistency(self, expected_schema: Dict[str, str], file_path: str, layer_name: str) -> bool:
-        """
-        Checks if the DataFrame's schema matches an expected schema.
-
-        Args:
-            expected_schema (Dict[str, str]): A dictionary mapping column names to expected data types (e.g., 'object', 'int64', 'datetime64[ns]').
-            file_path (str): The full path to the Parquet file to check.
-            layer_name (str): The name of the data layer (e.g., "Silver", "Gold").
-
-        Returns:
-            bool: True if the schema is consistent, False otherwise.
-        """
-        logger.info(f"Starting schema consistency check for {layer_name} layer at {file_path}...")
-        df = None
-        try:
-            df = self._load_data(file_path)
-
-            current_schema = df.dtypes.apply(lambda x: str(x)).to_dict()
-            passed = True
-
-            # Check for missing columns in current schema
-            for col, expected_dtype in expected_schema.items():
-                if col not in current_schema:
-                    logger.error(f"Column '{col}' is missing in the {layer_name} layer data at {file_path}.")
-                    passed = False
-                elif current_schema[col] != expected_dtype:
-                    # Allow some flexibility for int/float, but warn
-                    if ('int' in expected_dtype and 'float' in current_schema[col]) or \
-                       ('float' in expected_dtype and 'int' in current_schema[col]):
-                        logger.warning(f"Column '{col}' in {layer_name} layer has dtype '{current_schema[col]}' but expected '{expected_dtype}'. (Coercion may occur)")
-                    elif expected_dtype == 'datetime64[ns]' and not current_schema[col].startswith('datetime'):
-                        logger.error(f"Column '{col}' in {layer_name} layer has dtype '{current_schema[col]}' but expected '{expected_dtype}'.")
-                        passed = False
-                    elif current_schema[col] != expected_dtype:
-                        logger.error(f"Column '{col}' in {layer_name} layer has dtype '{current_schema[col]}' but expected '{expected_dtype}'.")
-                        passed = False
-
-            # Check for unexpected columns in current schema
-            for col in current_schema.keys():
-                if col not in expected_schema:
-                    logger.warning(f"Column '{col}' found in {layer_name} layer data at {file_path} but is not in the expected schema.")
-
-            if passed:
-                logger.info(f"Schema consistency check passed for {layer_name} layer.")
-            else:
-                logger.warning(f"Schema consistency check failed for {layer_name} layer.")
-            return passed
-        except FileNotFoundError as e:
-            logger.error(f"File not found for schema consistency check: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"An error occurred during schema consistency check for {layer_name} layer at {file_path}: {e}")
-            return False
-
-    def run_all_checks(self,
-                       bronze_file_name: str,
-                       silver_file_name: str,
-                       gold_file_name: str,
-                       silver_expected_schema: Dict[str, str],
-                       gold_expected_schema: Dict[str, str],
-                       silver_critical_cols: List[str],
-                       gold_critical_cols: List[str]) -> bool:
-        """
-        Runs all defined data quality checks.
-
-        Args:
-            bronze_file_name (str): The filename of the bronze layer data.
-            silver_file_name (str): The filename of the silver layer data.
-            gold_file_name (str): The filename of the gold layer data.
-            silver_expected_schema (Dict[str, str]): Expected schema for the silver layer.
-            gold_expected_schema (Dict[str, str]): Expected schema for the gold layer.
-            silver_critical_cols (List[str]): Critical columns for null checks in the silver layer.
-            gold_critical_cols (List[str]): Critical columns for null checks in the gold layer.
-
-        Returns:
-            bool: True if all checks pass, False otherwise.
-        """
-        logger.info("Starting all data quality checks for sales_pipeline...")
-        overall_status = True
-
-        bronze_full_path = os.path.join(self.bronze_staging_dir, bronze_file_name)
-        silver_full_path = os.path.join(self.silver_staging_dir, silver_file_name)
-        gold_full_path = os.path.join(self.gold_output_dir, gold_file_name)
-
-        # Ensure files exist before starting detailed checks
-        for path in [bronze_full_path, silver_full_path, gold_full_path]:
-            if not os.path.exists(path):
-                logger.error(f"Required data file for quality checks not found: {path}")
-                return False
-
-        # Row Count Checks
-        if not self.check_row_counts(bronze_file_name, silver_file_name, gold_file_name):
-            overall_status = False
-
-        # Null Rate Checks
-        if not self.check_null_rates(silver_full_path, silver_critical_cols):
-            overall_status = False
-        if not self.check_null_rates(gold_full_path, gold_critical_cols):
-            overall_status = False
-
-        # Schema Consistency Checks
-        if not self.check_schema_consistency(silver_expected_schema, silver_full_path, "Silver"):
-            overall_status = False
-        if not self.check_schema_consistency(gold_expected_schema, gold_full_path, "Gold"):
-            overall_status = False
-
-        if overall_status:
-            logger.info("All data quality checks passed for sales_pipeline.")
+                logger.warning(f"Bronze-Silver row count check failed: Silver rows ({silver_rows}) > Bronze rows ({bronze_rows}). Expected deduplication.")
+                check_bs_pass = False
         else:
-            logger.error("One or more data quality checks failed for sales_pipeline.")
-        return overall_status
+            logger.warning("Skipping Bronze-Silver row count check due to missing DataFrame(s).")
+            check_bs_pass = False # Consider a check failed if data is missing
+
+        results["bronze_to_silver_check"] = {
+            "passed": check_bs_pass,
+            "message": "Silver rows are less than or equal to Bronze rows (due to deduplication)." if check_bs_pass else "Silver rows are greater than Bronze rows or data is missing."
+        }
+
+        # Silver to Gold check (aggregation)
+        check_sg_pass = True
+        if silver_df is not None and gold_df is not None:
+            if gold_rows <= silver_rows:
+                logger.info(f"Silver-Gold row count check passed: {gold_rows} <= {silver_rows}")
+            else:
+                logger.warning(f"Silver-Gold row count check failed: Gold rows ({gold_rows}) > Silver rows ({silver_rows}). Expected aggregation.")
+                check_sg_pass = False
+        else:
+            logger.warning("Skipping Silver-Gold row count check due to missing DataFrame(s).")
+            check_sg_pass = False # Consider a check failed if data is missing
+
+        results["silver_to_gold_check"] = {
+            "passed": check_sg_pass,
+            "message": "Gold rows are less than or equal to Silver rows (due to aggregation)." if check_sg_pass else "Gold rows are greater than Silver rows or data is missing."
+        }
+
+        logger.info("Row count checks completed.")
+        return results
+
+    def check_null_rates(self, df: pd.DataFrame, columns: List[str], max_null_rate: float, layer_name: str) -> Dict[str, Any]:
+        """
+        Checks null rates for specified columns in a DataFrame.
+
+        Args:
+            df (pd.DataFrame): The DataFrame to check.
+            columns (List[str]): A list of column names to check for nulls.
+            max_null_rate (float): The maximum allowed null rate (e.g., 0.0 for 0%).
+            layer_name (str): The name of the data layer (e.g., "Silver").
+
+        Returns:
+            Dict[str, Any]: A dictionary containing the results of null rate checks.
+        """
+        results = {"layer": layer_name, "column_checks": []}
+        overall_pass = True
+        if df is None or df.empty:
+            logger.warning(f"DataFrame for {layer_name} is empty or None. Skipping null rate check.")
+            results["overall_passed"] = False
+            results["message"] = f"DataFrame for {layer_name} is empty or None."
+            return results
+
+        total_rows = len(df)
+        if total_rows == 0:
+            logger.warning(f"DataFrame for {layer_name} has 0 rows. Skipping null rate check.")
+            results["overall_passed"] = False
+            results["message"] = f"DataFrame for {layer_name} has 0 rows."
+            return results
+
+        for col in columns:
+            if col in df.columns:
+                null_count = df[col].isnull().sum()
+                null_rate = null_count / total_rows
+                check_pass = null_rate <= max_null_rate
+                if not check_pass:
+                    overall_pass = False
+                    logger.warning(f"Null rate check failed for {layer_name}.{col}: {null_rate:.2%} (expected <= {max_null_rate:.2%})")
+                else:
+                    logger.info(f"Null rate check passed for {layer_name}.{col}: {null_rate:.2%}")
+
+                results["column_checks"].append({
+                    "column": col,
+                    "null_count": null_count,
+                    "null_rate": round(null_rate, 4),
+                    "max_allowed_null_rate": max_null_rate,
+                    "passed": check_pass
+                })
+            else:
+                overall_pass = False
+                logger.warning(f"Column '{col}' not found in {layer_name} DataFrame. Skipping null rate check for this column.")
+                results["column_checks"].append({
+                    "column": col,
+                    "message": f"Column not found in {layer_name} DataFrame.",
+                    "passed": False
+                })
+
+        results["overall_passed"] = overall_pass
+        logger.info(f"Null rate checks for {layer_name} completed. Overall passed: {overall_pass}")
+        return results
+
+    def check_schema_consistency(
+        self,
+        expected_schema: Dict[str, str],
+        actual_df: Optional[pd.DataFrame],
+        layer_name: str
+    ) -> Dict[str, Any]:
+        """
+        Validates column names and data types against an expected schema.
+
+        Args:
+            expected_schema (Dict[str, str]): A dictionary where keys are column names
+                                               and values are expected pandas dtypes (e.g., 'int64', 'object').
+            actual_df (Optional[pd.DataFrame]): The DataFrame to check.
+            layer_name (str): The name of the data layer (e.g., "Silver").
+
+        Returns:
+            Dict[str, Any]: A dictionary containing the results of schema consistency checks.
+        """
+        results = {"layer": layer_name, "column_checks": []}
+        overall_pass = True
+
+        if actual_df is None:
+            logger.warning(f"DataFrame for {layer_name} is None. Skipping schema consistency check.")
+            results["overall_passed"] = False
+            results["message"] = f"DataFrame for {layer_name} is None."
+            return results
+
+        actual_columns = set(actual_df.columns)
+        expected_columns = set(expected_schema.keys())
+
+        # Check for missing columns
+        missing_columns = expected_columns - actual_columns
+        if missing_columns:
+            overall_pass = False
+            logger.warning(f"Schema check failed for {layer_name}: Missing expected columns: {missing_columns}")
+            for col in missing_columns:
+                results["column_checks"].append({
+                    "column": col,
+                    "check": "column_presence",
+                    "expected_dtype": expected_schema.get(col, "N/A"),
+                    "actual_dtype": "N/A",
+                    "passed": False,
+                    "message": "Column is missing"
+                })
+
+        # Check for unexpected columns
+        unexpected_columns = actual_columns - expected_columns
+        if unexpected_columns:
+            overall_pass = False # Mark as failed due to unexpected columns
+            logger.warning(f"Schema check for {layer_name}: Found unexpected columns: {unexpected_columns}")
+            for col in unexpected_columns:
+                 results["column_checks"].append({
+                    "column": col,
+                    "check": "column_presence",
+                    "expected_dtype": "N/A",
+                    "actual_dtype": str(actual_df[col].dtype),
+                    "passed": False, # Changed to False because unexpected columns indicate a deviation
+                    "message": "Column is unexpected but present"
+                })
+
+
+        # Check existing columns for data types
+        for col, expected_dtype in expected_schema.items():
+            if col in actual_df.columns:
+                actual_dtype = str(actual_df[col].dtype)
+                # Handle pandas numeric types more broadly (e.g., int64 vs int32)
+                # and datetime types (datetime64[ns] vs datetime64)
+                dtype_match = False
+                if 'int' in expected_dtype and 'int' in actual_dtype:
+                    dtype_match = True
+                elif 'float' in expected_dtype and 'float' in actual_dtype:
+                    dtype_match = True
+                elif 'object' in expected_dtype and 'object' in actual_dtype:
+                    dtype_match = True
+                elif 'datetime' in expected_dtype and 'datetime' in actual_dtype:
+                    dtype_match = True
+                elif expected_dtype == actual_dtype:
+                    dtype_match = True
+
+                if not dtype_match:
+                    overall_pass = False
+                    logger.warning(f"Schema check failed for {layer_name}.{col}: Expected dtype '{expected_dtype}', got '{actual_dtype}'")
+                else:
+                    logger.info(f"Schema check passed for {layer_name}.{col}: Dtype '{actual_dtype}' matches expected '{expected_dtype}'")
+
+                results["column_checks"].append({
+                    "column": col,
+                    "check": "dtype_consistency",
+                    "expected_dtype": expected_dtype,
+                    "actual_dtype": actual_dtype,
+                    "passed": dtype_match,
+                    "message": "Data type matches expected" if dtype_match else "Data type mismatch"
+                })
+
+        results["overall_passed"] = overall_pass
+        logger.info(f"Schema consistency checks for {layer_name} completed. Overall passed: {overall_pass}")
+        return results
+
+    def run_all_checks(
+        self,
+        bronze_path: str,
+        silver_path: str,
+        gold_path: str
+    ) -> Dict[str, Any]:
+        """
+        Orchestrates all data quality checks across Bronze, Silver, and Gold layers.
+
+        Args:
+            bronze_path (str): Path to the Bronze layer Parquet file.
+            silver_path (str): Path to the Silver layer Parquet file.
+            gold_path (str): Path to the Gold layer Parquet file.
+
+        Returns:
+            Dict[str, Any]: A comprehensive report of all data quality checks.
+        """
+        logger.info("Starting all data quality checks for sales_pipeline.")
+        full_report: Dict[str, Any] = {"pipeline": "sales_pipeline", "timestamp": pd.Timestamp.now().isoformat()}
+
+        bronze_df = self._load_data(bronze_path)
+        silver_df = self._load_data(silver_path)
+        gold_df = self._load_data(gold_path)
+
+        # 1. Row Counts Check
+        logger.info("Running row count checks...")
+        full_report["row_count_checks"] = self.check_row_counts(bronze_df, silver_df, gold_df)
+
+        # 2. Null Rate Checks
+        logger.info("Running null rate checks...")
+        critical_cols_silver = self.config.get("critical_columns_silver", [])
+        critical_cols_gold = self.config.get("critical_columns_gold", [])
+        max_null_rate = self.config.get("max_null_rate", 0.0)
+
+        full_report["null_rate_checks_silver"] = self.check_null_rates(silver_df, critical_cols_silver, max_null_rate, "Silver")
+        full_report["null_rate_checks_gold"] = self.check_null_rates(gold_df, critical_cols_gold, max_null_rate, "Gold")
+
+        # 3. Schema Consistency Checks
+        logger.info("Running schema consistency checks...")
+        expected_schema_bronze = self.config.get("expected_schema_bronze", {})
+        expected_schema_silver = self.config.get("expected_schema_silver", {})
+        expected_schema_gold = self.config.get("expected_schema_gold", {})
+
+        full_report["schema_checks_bronze"] = self.check_schema_consistency(expected_schema_bronze, bronze_df, "Bronze")
+        full_report["schema_checks_silver"] = self.check_schema_consistency(expected_schema_silver, silver_df, "Silver")
+        full_report["schema_checks_gold"] = self.check_schema_consistency(expected_schema_gold, gold_df, "Gold")
+
+        # Determine overall status
+        overall_dq_pass = True
+        for check_type in ["row_count_checks", "null_rate_checks_silver", "null_rate_checks_gold",
+                           "schema_checks_bronze", "schema_checks_silver", "schema_checks_gold"]:
+            if check_type == "row_count_checks":
+                if not full_report[check_type]["bronze_to_silver_check"]["passed"]:
+                    overall_dq_pass = False
+                if not full_report[check_type]["silver_to_gold_check"]["passed"]:
+                    overall_dq_pass = False
+            else:
+                if not full_report[check_type].get("overall_passed", True): # Default to True if key is missing, to not fail if a check itself had issues
+                    overall_dq_pass = False
+
+        full_report["overall_data_quality_passed"] = overall_dq_pass
+
+        # Save report
+        try:
+            os.makedirs(os.path.dirname(self.report_path), exist_ok=True)
+            with open(self.report_path, 'w') as f:
+                json.dump(full_report, f, indent=4)
+            logger.info(f"Data quality report saved to: {self.report_path}")
+        except Exception as e:
+            logger.error(f"Failed to save data quality report to {self.report_path}: {e}")
+
+        logger.info(f"All data quality checks completed. Overall status: {'PASSED' if overall_dq_pass else 'FAILED'}")
+        return full_report
 
 def main() -> None:
     """
-    Main function to run data quality checks for the sales pipeline.
+    Main function to run the data quality checks for the sales_pipeline.
+    Configuration is loaded from environment variables or hardcoded defaults for demonstration.
     """
-    logger.info("Starting sales_pipeline data quality checks.")
+    logger.info("Starting data quality pipeline execution.")
 
-    # Configuration for staging and output directories
-    # These should ideally come from a config file or environment variables in a real setup
-    # For demonstration, using hardcoded paths relative to where this script might run
-    # Assume script runs from project root or similar. Adjust paths as necessary.
-    config = {
-        'bronze_staging_dir': os.getenv('BRONZE_STAGING_DIR', './data/bronze/sales_pipeline'),
-        'silver_staging_dir': os.getenv('SILVER_STAGING_DIR', './data/silver/sales_pipeline'),
-        'gold_output_dir': os.getenv('GOLD_OUTPUT_DIR', './data/gold/sales_pipeline')
-    }
+    # Define paths from environment variables or provide defaults
+    BRONZE_PATH = os.getenv("SALES_PIPELINE_BRONZE_PATH", "data/sales_pipeline/bronze/sales_data.parquet")
+    SILVER_PATH = os.getenv("SALES_PIPELINE_SILVER_PATH", "data/sales_pipeline/silver/sales_data_cleaned.parquet")
+    GOLD_PATH = os.getenv("SALES_PIPELINE_GOLD_PATH", "data/sales_pipeline/gold/sales_summary.parquet")
+    REPORT_PATH = os.getenv("SALES_PIPELINE_DQ_REPORT_PATH", "reports/sales_pipeline_dq_report.json")
 
-    # Ensure directories exist for testing/running purposes
-    for path in [config['bronze_staging_dir'], config['silver_staging_dir'], config['gold_output_dir']]:
-        os.makedirs(path, exist_ok=True)
-
-    # Define file names
-    bronze_file = "sales_raw.parquet"
-    silver_file = "sales_cleaned.parquet"
-    gold_file = "sales_aggregated.parquet"
-
-    # Define expected schemas for Silver and Gold layers
-    # Based on the pipeline description:
-    # Bronze: ['order_id', 'customer_id', 'customer_name', 'customer_email', 'product_id', 'product_name', 'quantity', 'unit_price', 'total_amount', 'order_date', 'region', 'status']
-    # Silver: Type casting for numerical and date columns, PII masking.
-    # Gold: Aggregation of total sales and quantity by order_date and region.
-    
-    # Expected Silver Schema after type casting and PII masking
-    silver_expected_schema = {
-        'order_id': 'object',           # Typically string/object
-        'customer_id': 'object',        # Typically string/object
-        'customer_name': 'object',      # Masked, so still object (string)
-        'customer_email': 'object',     # Masked, so still object (string)
-        'product_id': 'object',         # Typically string/object
-        'product_name': 'object',       # Masked, so still object (string)
-        'quantity': 'int64',            # Type cast to int
-        'unit_price': 'float64',        # Type cast to float
-        'total_amount': 'float64',      # Type cast to float
-        'order_date': 'datetime64[ns]', # Type cast to datetime
+    # Expected schemas for each layer based on pipeline context
+    # Note: Using pandas-like dtype strings. 'object' for strings, 'int64'/'float64' for numbers, 'datetime64[ns]' for dates.
+    expected_schema_bronze: Dict[str, str] = {
+        'order_id': 'object',
+        'customer_id': 'object',
+        'customer_name': 'object',
+        'customer_email': 'object',
+        'product_id': 'object',
+        'product_name': 'object',
+        'quantity': 'int64',
+        'unit_price': 'float64',
+        'total_amount': 'float64',
+        'order_date': 'datetime64[ns]',
         'region': 'object',
         'status': 'object'
     }
 
-    # Expected Gold Schema after aggregation by order_date and region
-    gold_expected_schema = {
-        'order_date': 'datetime64[ns]', # Group by key
-        'region': 'object',             # Group by key
-        'total_sales_amount': 'float64',# Aggregated column
-        'total_quantity_sold': 'int64'  # Aggregated column
+    expected_schema_silver: Dict[str, str] = {
+        'order_id': 'object',
+        'customer_id': 'object',
+        'customer_name_masked': 'object',
+        'customer_email_masked': 'object',
+        'product_id': 'object',
+        'product_name_masked': 'object',
+        'quantity': 'int64',
+        'unit_price': 'float64',
+        'total_amount': 'float64',
+        'order_date': 'datetime64[ns]',
+        'region': 'object',
+        'status': 'object'
     }
 
-    # Define critical columns for null checks
-    # These are columns that absolutely should not have significant nulls
-    silver_critical_columns = ['order_id', 'customer_id', 'product_id', 'quantity', 'unit_price', 'total_amount', 'order_date', 'region']
-    gold_critical_columns = ['order_date', 'region', 'total_sales_amount', 'total_quantity_sold']
+    expected_schema_gold: Dict[str, str] = {
+        'order_date': 'datetime64[ns]',
+        'region': 'object',
+        'total_sales': 'float64',
+        'total_quantity': 'int64'
+    }
 
-    checker = DataQualityChecker(config)
-    
-    # Run all checks
-    checks_passed = checker.run_all_checks(
-        bronze_file_name=bronze_file,
-        silver_file_name=silver_file,
-        gold_file_name=gold_file,
-        silver_expected_schema=silver_expected_schema,
-        gold_expected_schema=gold_expected_schema,
-        silver_critical_cols=silver_critical_columns,
-        gold_critical_cols=gold_critical_columns
-    )
+    # Critical columns for null rate checks in Silver and Gold
+    critical_columns_silver: List[str] = [
+        'order_id', 'customer_id', 'product_id', 'quantity', 'unit_price', 'total_amount', 'order_date', 'region'
+    ]
+    critical_columns_gold: List[str] = [
+        'order_date', 'region', 'total_sales', 'total_quantity'
+    ]
 
-    if checks_passed:
-        logger.info("Sales pipeline data quality checks completed successfully.")
-        # Exit with a success code
-        exit(0)
+    dq_config = {
+        "report_path": REPORT_PATH,
+        "expected_schema_bronze": expected_schema_bronze,
+        "expected_schema_silver": expected_schema_silver,
+        "expected_schema_gold": expected_schema_gold,
+        "critical_columns_silver": critical_columns_silver,
+        "critical_columns_gold": critical_columns_gold,
+        "max_null_rate": 0.0 # Expect 0 nulls for critical columns
+    }
+
+    checker = DataQualityChecker(dq_config)
+    report = checker.run_all_checks(BRONZE_PATH, SILVER_PATH, GOLD_PATH)
+
+    if report.get("overall_data_quality_passed"):
+        logger.info("Data quality checks passed successfully!")
     else:
-        logger.error("Sales pipeline data quality checks failed.")
-        # Exit with a failure code
-        exit(1)
+        logger.error("Data quality checks failed. Review the report for details.")
 
 if __name__ == "__main__":
     main()

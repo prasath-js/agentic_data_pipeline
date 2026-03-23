@@ -5,4 +5,4 @@ SQLAlchemy
 psycopg2-binary
 mysql-connector-python
 python-dotenv
-PyYAML
+boto3

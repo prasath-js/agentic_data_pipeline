@@ -3,82 +3,72 @@ import os
 import sys
 from datetime import datetime
 
-# Add the src directory to the Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
+# Ensure src is in the system path for module imports
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
 
-from src.bronze.sales_bronze import sales_bronze_layer
-from src.silver.sales_silver import sales_silver_layer
-from src.gold.sales_gold import sales_gold_layer
-from src.quality.sales_quality import sales_quality_checks
-from src.utils.config_loader import load_config
+from src.bronze.sales_bronze import sales_bronze_pipeline
+from src.silver.sales_silver import sales_silver_pipeline
+from src.gold.sales_gold import sales_gold_pipeline
+from src.quality.data_quality import run_data_quality_checks
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def run_pipeline(config: dict) -> None:
-    """
-    Orchestrates the sales data pipeline, executing Bronze, Silver, Gold,
-    and Quality layers in sequence.
-
-    Args:
-        config (dict): A dictionary containing pipeline configuration.
-    """
-    pipeline_name: str = config['pipeline_name']
-    logger.info(f"Starting {pipeline_name} pipeline run.")
-
-    try:
-        # Bronze Layer
-        logger.info("Executing Bronze Layer for sales data...")
-        bronze_output_path: str = sales_bronze_layer(config)
-        logger.info(f"Bronze Layer completed. Output: {bronze_output_path}")
-
-        # Silver Layer
-        logger.info("Executing Silver Layer for sales data...")
-        silver_output_path: str = sales_silver_layer(bronze_output_path, config)
-        logger.info(f"Silver Layer completed. Output: {silver_output_path}")
-
-        # Quality Checks (after Silver Layer)
-        logger.info("Executing Quality Checks on Silver Layer data...")
-        quality_status: bool = sales_quality_checks(silver_output_path, config)
-        if quality_status:
-            logger.info("Quality checks passed for Silver Layer data.")
-        else:
-            logger.error("Quality checks failed for Silver Layer data. Aborting Gold Layer.")
-            return # Exit if quality checks fail
-
-        # Gold Layer
-        logger.info("Executing Gold Layer for sales data...")
-        gold_output_path: str = sales_gold_layer(silver_output_path, config)
-        logger.info(f"Gold Layer completed. Output: {gold_output_path}")
-
-    except (FileNotFoundError, IOError, KeyError, ValueError) as e: # Catch more specific exceptions
-        logger.error(f"A data processing error occurred during the {pipeline_name} pipeline run: {e}", exc_info=True)
-        sys.exit(1)
-    except Exception as e: # Catch any other unexpected errors
-        logger.error(f"An unexpected error occurred during the {pipeline_name} pipeline run: {e}", exc_info=True)
-        sys.exit(1)
-    finally:
-        logger.info(f"Finished {pipeline_name} pipeline run.")
-
 def main() -> None:
     """
-    Main entry point for the sales pipeline. Loads configuration and
-    initiates the pipeline run.
+    Main entry point for the sales_pipeline ETL process.
+    Orchestrates the Bronze, Silver, Gold, and Data Quality layers.
     """
-    config_path: str = os.getenv('PIPELINE_CONFIG_PATH', 'config.yaml')
-    config: dict = load_config(config_path)
+    pipeline_name = "sales_pipeline"
+    start_time = datetime.now()
+    logger.info(f"Starting {pipeline_name} at {start_time}")
 
-    if not config:
-        logger.error(f"Failed to load configuration from {config_path}. Exiting.")
-        sys.exit(1)
+    # Define staging and output directories
+    # Use environment variables for paths to support different environments
+    base_staging_dir = os.getenv("STAGING_DIR", "data/staging")
+    bronze_output_dir = os.path.join(base_staging_dir, "bronze")
+    silver_output_dir = os.path.join(base_staging_dir, "silver")
+    gold_output_dir = os.getenv("GOLD_OUTPUT_DIR", "data/output") # Gold layer output directory
 
-    logger.info(f"Configuration loaded successfully from {config_path}")
+    # Ensure directories exist
+    os.makedirs(bronze_output_dir, exist_ok=True)
+    os.makedirs(silver_output_dir, exist_ok=True)
+    os.makedirs(gold_output_dir, exist_ok=True)
 
-    # Add run_id to config for traceability
-    config['run_id'] = datetime.now().strftime("%Y%m%d%H%M%S")
+    try:
+        logger.info("--- Running Bronze Layer ---")
+        sales_csv_path = os.getenv("SALES_CSV_PATH", "data/input/sales.csv")
+        bronze_file_path = sales_bronze_pipeline(sales_csv_path, bronze_output_dir)
+        logger.info(f"Bronze layer completed. Output: {bronze_file_path}")
 
-    run_pipeline(config)
+        logger.info("--- Running Silver Layer ---")
+        silver_file_path = sales_silver_pipeline(bronze_file_path, silver_output_dir)
+        logger.info(f"Silver layer completed. Output: {silver_file_path}")
+
+        logger.info("--- Running Gold Layer ---")
+        # The gold layer directly outputs to the final target,
+        # which is a local file specified by gold_output_dir.
+        gold_output_path = sales_gold_pipeline(silver_file_path, gold_output_dir)
+        logger.info(f"Gold layer completed. Output: {gold_output_path}")
+
+        logger.info("--- Running Data Quality Checks ---")
+        # Run quality checks on the Gold layer output
+        quality_passed = run_data_quality_checks(gold_output_path)
+        if quality_passed:
+            logger.info("Data quality checks passed successfully for the Gold layer.")
+        else:
+            logger.error("Data quality checks failed for the Gold layer. Please investigate.")
+            sys.exit(1) # Exit with an error code if quality checks fail
+
+    except Exception as e:
+        logger.exception(f"An error occurred during the {pipeline_name} pipeline execution.")
+        sys.exit(1) # Exit with a non-zero code to indicate failure
+
+    finally:
+        end_time = datetime.now()
+        duration = end_time - start_time
+        logger.info(f"Finished {pipeline_name} at {end_time}. Total duration: {duration}")
 
 if __name__ == "__main__":
     main()

@@ -1,36 +1,30 @@
-FROM python:3.9-slim-buster
+FROM python:3.10-slim-buster
 
+# Set working directory
 WORKDIR /app
 
-# Install system dependencies for any potential database drivers or other tools
-# For example, if you were connecting to PostgreSQL, you might need libpq-dev
-# If not explicitly needed, this can be minimal.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+# Install system dependencies required for psycopg2 or other database drivers
+# In this case, we don't have a direct DB connection that requires system libs
+# If we were connecting to Postgres using psycopg2, we'd need libpq-dev
+# If we were connecting to MySQL using mysqlclient, we'd need default-libmysqlclient-dev
+# For now, we assume standard dependencies are sufficient for local file I/O
 
-# Copy the requirements file and install dependencies
+# Copy requirements file and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the entire project
 COPY . .
 
-# Ensure all src subdirectories have __init__.py files,
-# though this should ideally be handled during development.
-RUN find src -type d -exec touch {}/__init__.py \;
-
 # Set environment variables for the pipeline
-ENV PYTHONUNBUFFERED 1
-ENV SALES_PIPELINE_STAGING_DIR "/app/data/staging"
-ENV SALES_PIPELINE_OUTPUT_DIR "/app/data/output"
+ENV PIPELINE_NAME=sales_pipeline
+ENV PYTHONUNBUFFERED=1
 
-# Create necessary directories
-RUN mkdir -p ${SALES_PIPELINE_STAGING_DIR}/bronze/sales \
-           ${SALES_PIPELINE_STAGING_DIR}/silver/sales \
-           ${SALES_PIPELINE_OUTPUT_DIR}/gold
+# Create necessary directories for logs and data
+RUN mkdir -p /app/logs /app/data/bronze /app/data/silver /app/data/gold /app/config
 
-# Define the command to run the pipeline.
-# This example assumes a single entry point for the entire pipeline.
-# For a daily schedule, you might trigger the main pipeline script.
-CMD ["python", "src/sales_pipeline.py"]
+# Define the command to run the pipeline
+# This can be overridden when running the container
+# For a daily schedule, a cron job on the host or an orchestrator would trigger this command.
+# Here, we provide a placeholder command that runs the gold layer, assuming it orchestrates the full pipeline.
+CMD ["python", "src/sales_pipeline/gold.py"]

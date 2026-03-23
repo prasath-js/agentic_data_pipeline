@@ -1,77 +1,81 @@
 import logging
 import os
-from logging.handlers import RotatingFileHandler
+from datetime import datetime
 
-def setup_logging(pipeline_name: str = "sales_pipeline") -> None:
+def setup_logging(
+    log_dir: str = "logs",
+    pipeline_name: str = "sales_pipeline",
+    log_level: str = "INFO"
+) -> None:
     """
-    Sets up logging for the pipeline, configuring both console and file handlers.
+    Configures the logging for the pipeline, setting up both console and file handlers.
 
-    Logs are written to a file named after the pipeline in the 'logs' directory.
-    The log file will rotate when it reaches 5MB, keeping 5 backup files.
-    The logging level is configurable via an environment variable.
+    Logs will be written to a file named 'pipeline_name_YYYYMMDD.log' in the specified log directory,
+    and also output to the console.
 
     Args:
-        pipeline_name (str): The name of the pipeline, used for log file naming.
+        log_dir (str): The directory where log files will be stored. Defaults to 'logs'.
+        pipeline_name (str): The name of the pipeline, used in the log file name.
+                             Defaults to 'sales_pipeline'.
+        log_level (str): The minimum level of messages to log (e.g., 'DEBUG', 'INFO', 'WARNING',
+                         'ERROR', 'CRITICAL'). Defaults to 'INFO'.
     """
-    log_dir = "logs"
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
+    # Ensure the log directory exists
+    os.makedirs(log_dir, exist_ok=True)
 
-    log_file_path = os.path.join(log_dir, f"{pipeline_name}.log")
+    # Define log file name with current date
+    today_date = datetime.now().strftime("%Y%m%d")
+    log_file_path = os.path.join(log_dir, f"{pipeline_name}_{today_date}.log")
 
-    # Get log level from environment variable, default to INFO
-    log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
-    numeric_level = getattr(logging, log_level_str, None)
-    if not isinstance(numeric_level, int):
-        raise ValueError(f"Invalid LOG_LEVEL: {log_level_str}")
-
-    # Configure the root logger
+    # Get the root logger
     root_logger = logging.getLogger()
-    root_logger.setLevel(numeric_level)
+    root_logger.setLevel(log_level.upper())
 
-    # Clear existing handlers to prevent duplicate logs in case of multiple calls
-    if root_logger.hasHandlers():
-        root_logger.handlers.clear()
+    # Clear existing handlers to prevent duplicate logs
+    if root_logger.handlers:
+        for handler in root_logger.handlers:
+            root_logger.removeHandler(handler)
 
+    # Formatter for log messages
     formatter = logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
-    # Console Handler
+    # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
 
-    # File Handler with rotation
-    file_handler = RotatingFileHandler(
-        log_file_path,
-        maxBytes=5 * 1024 * 1024,  # 5 MB
-        backupCount=5,
-        encoding="utf-8"
-    )
+    # File handler
+    file_handler = logging.FileHandler(log_file_path)
     file_handler.setFormatter(formatter)
     root_logger.addHandler(file_handler)
 
-    # Set pandas logger to warning to reduce verbosity
-    logging.getLogger("pandas").setLevel(logging.WARNING)
-    logging.getLogger("numexpr").setLevel(logging.WARNING)
-    logging.getLogger("fsspec").setLevel(logging.WARNING)
+    # Prevent messages from propagating to the root logger if specific loggers are used
+    # and configured elsewhere, to avoid duplicate console output.
+    # However, for this setup, we're configuring the root logger directly.
+    # logging.getLogger('some_module').propagate = False
 
-    root_logger.info(f"Logging configured for pipeline: {pipeline_name} at level {log_level_str}")
-    root_logger.info(f"Log messages will be written to console and file: {log_file_path}")
+    logging.info(f"Logging configured. Log level: {log_level.upper()}. "
+                 f"Log file: {os.path.abspath(log_file_path)}")
 
 if __name__ == "__main__":
-    # Example usage:
-    # To test, set an environment variable, e.g., export LOG_LEVEL=DEBUG
-    setup_logging()
+    # Example usage when run directly
+    # Configure logging using environment variables or defaults
+    LOG_DIR = os.getenv("LOG_DIR", "logs")
+    PIPELINE_NAME = os.getenv("PIPELINE_NAME", "sales_pipeline")
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+    setup_logging(log_dir=LOG_DIR, pipeline_name=PIPELINE_NAME, log_level=LOG_LEVEL)
+
+    # Get a logger for this module for testing
     logger = logging.getLogger(__name__)
+
     logger.debug("This is a debug message.")
-    logger.info("This is an info message.")
+    logger.info("This is an info message from the main block.")
     logger.warning("This is a warning message.")
     logger.error("This is an error message.")
-    logger.critical("This is a critical message.")
-
     try:
-        1 / 0
-    except ZeroDivisionError:
-        logger.exception("An exception occurred during division.")
+        raise ValueError("An example error")
+    except ValueError as e:
+        logger.exception("An exception occurred during example execution.")

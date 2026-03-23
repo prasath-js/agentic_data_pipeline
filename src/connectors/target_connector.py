@@ -9,103 +9,105 @@ logger = logging.getLogger(__name__)
 
 class TargetConnector:
     """
-    Manages writing data to the configured output destination.
-    Supports writing to local files.
+    Handles writing final processed data (Gold layer) to the configured output destination.
+    This connector is specifically designed for writing to local files.
     """
 
-    def __init__(self, output_config: Dict[str, Any]):
+    def __init__(self, output_base_path: str) -> None:
         """
-        Initializes the TargetConnector with output configuration.
+        Initializes the TargetConnector with the base path for output files.
 
         Args:
-            output_config (Dict[str, Any]): A dictionary containing output destination configuration,
-                                             e.g., {"type": "local_file", "path": "/path/to/output"}.
+            output_base_path (str): The base directory where output files will be saved.
         """
-        self.output_config = output_config
-        self.output_type = output_config.get("type")
-        logger.info(f"Initialized TargetConnector with output type: {self.output_type}")
+        if not output_base_path:
+            raise ValueError("Output base path cannot be empty.")
+        self.output_base_path = output_base_path
+        logger.info(f"TargetConnector initialized with output base path: {self.output_base_path}")
+        self._ensure_output_directory_exists()
 
-        if self.output_type == "local_file":
-            # For local_file, we expect a base directory, the actual file path will be constructed later
-            self.base_output_path = output_config.get("path", os.getenv("SALES_PIPELINE_OUTPUT_PATH", "data/gold"))
-            if not os.path.exists(self.base_output_path):
-                logger.info(f"Creating output directory: {self.base_output_path}")
-                os.makedirs(self.base_output_path)
-        else:
-            raise ValueError(f"Unsupported output type: {self.output_type}")
-
-    def write_data(self, dataframe: pd.DataFrame, file_name: str) -> None:
+    def _ensure_output_directory_exists(self) -> None:
         """
-        Writes the given DataFrame to the configured output destination.
-
-        Args:
-            dataframe (pd.DataFrame): The DataFrame to write.
-            file_name (str): The name of the file to write (e.g., "aggregated_sales.parquet").
+        Ensures that the output directory exists, creating it if necessary.
         """
-        logger.info(f"Attempting to write data to target: {self.output_type}")
-
-        if self.output_type == "local_file":
-            self._write_to_local_file(dataframe, file_name)
-        else:
-            # This case should ideally be caught in __init__
-            raise ValueError(f"Unsupported output type: {self.output_type}")
-
-    def _write_to_local_file(self, dataframe: pd.DataFrame, file_name: str) -> None:
-        """
-        Writes the DataFrame to a local file.
-
-        Args:
-            dataframe (pd.DataFrame): The DataFrame to write.
-            file_name (str): The name of the file (e.g., "aggregated_sales.parquet").
-        """
-        output_file_path = os.path.join(self.base_output_path, file_name)
-        file_extension = os.path.splitext(file_name)[1].lower()
-
         try:
-            if file_extension == ".csv":
-                dataframe.to_csv(output_file_path, index=False)
-                logger.info(f"Successfully wrote {len(dataframe)} rows to local CSV file: {output_file_path}")
-            elif file_extension == ".parquet":
-                dataframe.to_parquet(output_file_path, index=False)
-                logger.info(f"Successfully wrote {len(dataframe)} rows to local Parquet file: {output_file_path}")
-            else:
-                raise ValueError(f"Unsupported file format for local_file output: {file_extension}")
-        except Exception as e:
-            logger.error(f"Error writing data to local file {output_file_path}: {e}")
+            os.makedirs(self.output_base_path, exist_ok=True)
+            logger.info(f"Ensured output directory exists: {self.output_base_path}")
+        except OSError as e:
+            logger.error(f"Error creating output directory {self.output_base_path}: {e}")
             raise
-        finally:
-            logger.debug("Local file write operation attempted.")
+
+    def write_dataframe_to_local_parquet(self, dataframe: pd.DataFrame, file_name: str, **kwargs: Any) -> None:
+        """
+        Writes a pandas DataFrame to a local Parquet file.
+
+        Args:
+            dataframe (pd.DataFrame): The DataFrame to write.
+            file_name (str): The name of the file (e.g., "sales_daily_summary.parquet").
+            **kwargs (Any): Additional keyword arguments to pass to pandas.DataFrame.to_parquet.
+        
+        Raises:
+            IOError: If there's an issue writing the file.
+        """
+        if dataframe.empty:
+            logger.warning(f"Attempted to write an empty DataFrame to {file_name}. No file will be created.")
+            return
+
+        file_path = os.path.join(self.output_base_path, file_name)
+        try:
+            logger.info(f"Attempting to write DataFrame to local Parquet file: {file_path}")
+            dataframe.to_parquet(file_path, index=False, **kwargs)
+            logger.info(f"Successfully wrote DataFrame to {file_path}.")
+            logger.info(f"Rows written: {len(dataframe)}")
+        except IOError as e:
+            logger.error(f"Failed to write DataFrame to {file_path}: {e}")
+            raise IOError(f"Failed to write DataFrame to {file_path}") from e
 
 def main() -> None:
     """
-    Main function to demonstrate the TargetConnector.
-    This will typically be called from the Gold layer to write final output.
+    Main function to demonstrate the TargetConnector's capabilities.
+    In a real pipeline, this would receive the Gold layer DataFrame.
     """
     logger.info("Starting TargetConnector demonstration.")
 
-    # Example configuration for local file output
-    output_config = {
-        "type": "local_file",
-        "path": os.getenv("SALES_PIPELINE_OUTPUT_PATH", "data/gold")
-    }
+    # Configuration for the output path
+    # Example: SALES_PIPELINE_GOLD_OUTPUT_PATH=/app/data/gold
+    output_base_path = os.getenv("SALES_PIPELINE_GOLD_OUTPUT_PATH", "data/gold")
 
-    # Create a dummy DataFrame
-    data = {
-        'order_date': pd.to_datetime(['2023-01-01', '2023-01-01', '2023-01-02']),
-        'region': ['East', 'West', 'East'],
-        'total_sales': [100.50, 200.75, 150.20],
-        'total_quantity': [2, 3, 1]
-    }
-    df = pd.DataFrame(data)
+    if not output_base_path:
+        logger.error("SALES_PIPELINE_GOLD_OUTPUT_PATH environment variable not set. Exiting.")
+        return
 
     try:
-        connector = TargetConnector(output_config)
-        # Write to a Parquet file
-        connector.write_data(df, "sales_pipeline_gold_output.parquet")
-        # Write to a CSV file (demonstration of different format)
-        connector.write_data(df, "sales_pipeline_gold_output.csv")
+        # Initialize the connector
+        connector = TargetConnector(output_base_path=output_base_path)
+
+        # Simulate a Gold layer DataFrame
+        gold_data = {
+            'order_date': pd.to_datetime(['2023-01-01', '2023-01-01', '2023-01-02']),
+            'region': ['North', 'South', 'North'],
+            'total_sales': [1500.50, 2300.75, 1200.00],
+            'total_quantity': [10, 15, 8]
+        }
+        gold_df = pd.DataFrame(gold_data)
+        logger.info(f"Simulated Gold DataFrame created with {len(gold_df)} rows.")
+
+        # Define the output file name
+        output_file_name = "sales_daily_summary_20230101.parquet"
+
+        # Write the DataFrame
+        connector.write_dataframe_to_local_parquet(gold_df, output_file_name)
+
+        # Demonstrate writing an empty DataFrame (should log a warning and not create a file)
+        empty_df = pd.DataFrame()
+        connector.write_dataframe_to_local_parquet(empty_df, "empty_data_test.parquet")
+
+    except ValueError as ve:
+        logger.error(f"Configuration error: {ve}")
+    except IOError as ioe:
+        logger.error(f"File operation error: {ioe}")
     except Exception as e:
-        logger.error(f"TargetConnector demonstration failed: {e}")
+        logger.error(f"An unexpected error occurred during demonstration: {e}", exc_info=True)
 
     logger.info("TargetConnector demonstration finished.")
 

@@ -1,161 +1,204 @@
-import os
-import logging
 import pandas as pd
+import logging
+import os
 import hashlib
-from typing import List
+from typing import List, Dict, Any, Tuple
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def hash_value(value: str) -> str:
-    """Hashes a string value using SHA-256."""
-    if pd.isna(value):
-        return None
-    return hashlib.sha256(str(value).encode('utf-8')).hexdigest()
-
-class SilverTransformer:
+def load_bronze_data(bronze_path: str, filename: str) -> pd.DataFrame:
     """
-    Transforms bronze layer data into silver layer data.
-    This includes cleaning, type casting, PII masking, and joining data sources.
+    Loads data from a bronze layer parquet file.
+
+    Args:
+        bronze_path (str): The base path to the bronze layer.
+        filename (str): The name of the parquet file to load (e.g., 'sales.parquet').
+
+    Returns:
+        pd.DataFrame: The loaded DataFrame.
+
+    Raises:
+        FileNotFoundError: If the specified parquet file does not exist.
+        Exception: For other errors during file loading.
     """
-
-    def __init__(self, bronze_dir: str, silver_dir: str):
-        """
-        Initializes the SilverTransformer with input and output directories.
-
-        Args:
-            bronze_dir (str): Path to the bronze layer directory.
-            silver_dir (str): Path to the silver layer directory where transformed data will be stored.
-        """
-        self.bronze_dir = bronze_dir
-        self.silver_dir = silver_dir
-        os.makedirs(self.silver_dir, exist_ok=True)
-        logger.info(f"SilverTransformer initialized with bronze_dir: {self.bronze_dir}, silver_dir: {self.silver_dir}")
-
-    def _load_bronze_data(self, source_name: str) -> pd.DataFrame:
-        """
-        Loads bronze layer data for a given source.
-
-        Args:
-            source_name (str): The name of the data source (e.g., 'sales').
-
-        Returns:
-            pd.DataFrame: Loaded bronze data.
-
-        Raises:
-            FileNotFoundError: If the bronze parquet file does not exist.
-            Exception: For other errors during file loading.
-        """
-        file_path = os.path.join(self.bronze_dir, f"{source_name}_raw.parquet")
-        df = pd.DataFrame()
-        try:
-            if not os.path.exists(file_path):
-                raise FileNotFoundError(f"Bronze file not found: {file_path}")
-            df = pd.read_parquet(file_path)
-            logger.info(f"Successfully loaded bronze data from {file_path}. Rows: {len(df)}")
-        except FileNotFoundError as e:
-            logger.error(f"Error loading bronze data: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"An unexpected error occurred while loading bronze data from {file_path}: {e}")
-            raise
+    filepath = os.path.join(bronze_path, filename)
+    logger.info(f"Attempting to load bronze data from: {filepath}")
+    try:
+        df = pd.read_parquet(filepath)
+        logger.info(f"Successfully loaded {len(df)} rows from {filename}")
         return df
+    except FileNotFoundError as e:
+        logger.error(f"Bronze file not found at {filepath}: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Error loading bronze data from {filepath}: {e}")
+        raise
 
-    def _apply_type_casting(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Applies type casting to numerical and date columns.
+def mask_pii(df: pd.DataFrame, pii_columns: List[str]) -> pd.DataFrame:
+    """
+    Masks PII columns in a DataFrame using SHA-256 hashing.
 
-        Args:
-            df (pd.DataFrame): The input DataFrame.
+    Args:
+        df (pd.DataFrame): The input DataFrame.
+        pii_columns (List[str]): A list of column names to mask.
 
-        Returns:
-            pd.DataFrame: DataFrame with applied type casting.
-        """
-        logger.info("Applying type casting to DataFrame.")
-        # Type casting for 'sales' source columns
-        numeric_cols = ['quantity', 'unit_price', 'total_amount']
-        date_cols = ['order_date']
+    Returns:
+        pd.DataFrame: The DataFrame with PII columns masked.
+    """
+    df_copy = df.copy()
+    for col in pii_columns:
+        if col in df_copy.columns:
+            df_copy[col] = df_copy[col].astype(str).apply(lambda x: hashlib.sha256(x.encode()).hexdigest())
+            logger.info(f"Masked PII column: {col}")
+        else:
+            logger.warning(f"PII column '{col}' not found in DataFrame. Skipping masking.")
+    return df_copy
 
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-                logger.debug(f"Casted '{col}' to numeric.")
-        for col in date_cols:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col], errors='coerce')
-                logger.debug(f"Casted '{col}' to datetime.")
-        return df
+def clean_sales_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Cleans the sales DataFrame by performing type casting and deduplication.
+    It returns a detailed, cleaned DataFrame suitable for further aggregations
+    in the gold layer, avoiding redundant aggregation.
 
-    def _mask_pii(self, df: pd.DataFrame, pii_columns: List[str]) -> pd.DataFrame:
-        """
-        Masks PII columns in the DataFrame using SHA-256 hashing.
+    Args:
+        df (pd.DataFrame): The input sales DataFrame.
 
-        Args:
-            df (pd.DataFrame): The input DataFrame.
-            pii_columns (List[str]): List of column names identified as PII.
+    Returns:
+        pd.DataFrame: The cleaned and transformed DataFrame (not aggregated).
+    """
+    logger.info("Starting cleaning and transformation of sales data.")
 
-        Returns:
-            pd.DataFrame: DataFrame with PII columns masked.
-        """
-        logger.info(f"Masking PII columns: {pii_columns}")
-        for col in pii_columns:
-            if col in df.columns:
-                df[f'{col}_masked'] = df[col].astype(str).apply(hash_value)
-                df = df.drop(columns=[col]) # Drop original PII column after masking
-                logger.debug(f"Masked and dropped '{col}'. New column: '{col}_masked'")
+    initial_rows = len(df)
+    logger.info(f"Initial row count: {initial_rows}")
+
+    # Type casting
+    type_mapping = {
+        'quantity': 'int',
+        'unit_price': 'float',
+        'total_amount': 'float'
+    }
+    for col, dtype in type_mapping.items():
+        if col in df.columns:
+            # Convert to numeric, coercing errors to NaN, then fill NaN with 0 before converting to int for quantity
+            if dtype == 'int':
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype('int')
             else:
-                logger.warning(f"PII column '{col}' not found in DataFrame. Skipping masking.")
-        return df
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            logger.info(f"Type casted column '{col}' to {dtype}.")
+        else:
+            logger.warning(f"Column '{col}' not found for type casting.")
 
-    def transform_sales_data(self) -> None:
-        """
-        Performs the full silver layer transformation for the 'sales' data.
-        This includes loading, cleaning, PII masking, and writing to silver layer.
-        """
-        logger.info("Starting silver layer transformation for 'sales' data.")
-        try:
-            sales_df = self._load_bronze_data('sales')
+    # Convert order_date to datetime, coercing errors to NaT
+    if 'order_date' in df.columns:
+        df['order_date'] = pd.to_datetime(df['order_date'], errors='coerce')
+        # Drop rows where order_date couldn't be parsed
+        original_rows_after_date_cast = len(df)
+        df.dropna(subset=['order_date'], inplace=True)
+        if len(df) < original_rows_after_date_cast:
+            logger.warning(f"Dropped {original_rows_after_date_cast - len(df)} rows due to invalid 'order_date'.")
+        logger.info("Type casted column 'order_date' to datetime.")
+    else:
+        logger.warning("Column 'order_date' not found for type casting.")
 
-            # Data Cleaning & Type Casting
-            sales_df = self._apply_type_casting(sales_df)
-            sales_df = sales_df.dropna(subset=['order_id', 'customer_id', 'product_id', 'quantity', 'unit_price', 'total_amount', 'order_date'])
-            logger.info(f"After cleaning and type casting, 'sales' data has {len(sales_df)} rows.")
+    # Deduplication based on a composite key to preserve line items
+    # Assuming 'order_id', 'product_id', and 'quantity' (or other descriptive columns)
+    # form a unique line item. Adjust the subset based on actual data granularity.
+    # For now, let's use a common set of columns that would identify a line item.
+    # If 'product_id' is not present, 'order_id' and 'line_item_id' (if available) would be better.
+    # Given the available columns, 'order_id', 'product_name', 'quantity', 'unit_price' could be a reasonable composite.
+    # If 'product_name' is masked, perhaps 'product_id' should be a required column if available.
+    # For this fix, let's use a combination of identifiers commonly found in sales data that represent a unique line item.
+    # If 'product_id' is not available, 'product_name' (pre-masking if needed for deduplication) or just 'order_id' and time based unique identifier.
+    # Let's assume 'order_id' + 'quantity' + 'unit_price' is sufficient to identify a line item.
+    # This might need domain-specific adjustment.
+    deduplication_subset = ['order_id', 'quantity', 'unit_price']
+    if all(col in df.columns for col in deduplication_subset):
+        initial_rows_before_dedupe = len(df)
+        df.drop_duplicates(subset=deduplication_subset, inplace=True)
+        logger.info(f"Deduplicated data based on {deduplication_subset}. Rows removed: {initial_rows_before_dedupe - len(df)}. Remaining rows: {len(df)}")
+    elif 'order_id' in df.columns:
+        # Fallback to order_id only if composite is not fully available, but warn about potential data loss
+        logger.warning(f"Composite deduplication keys {deduplication_subset} not fully present. Deduplicating by 'order_id' alone, which may drop valid line items.")
+        initial_rows_before_dedupe = len(df)
+        df.drop_duplicates(subset=['order_id'], inplace=True)
+        logger.info(f"Deduplicated data based on 'order_id'. Rows removed: {initial_rows_before_dedupe - len(df)}. Remaining rows: {len(df)}")
+    else:
+        logger.warning("Neither composite key nor 'order_id' found for deduplication. Skipping deduplication.")
 
-            # PII Masking
-            pii_columns = ['customer_name', 'customer_email', 'product_name']
-            sales_df = self._mask_pii(sales_df, pii_columns)
+    # Remove the aggregation step from clean_sales_data
+    # This function should now return the detailed, cleaned DataFrame.
+    # The aggregation will be handled in the gold layer.
+    logger.info("Finished cleaning and transformation of sales data. Returning detailed DataFrame.")
+    return df
 
-            # No joins specified for this pipeline, so proceeding to save.
+def write_silver_data(df: pd.DataFrame, silver_path: str, filename: str) -> None:
+    """
+    Writes the transformed DataFrame to the silver layer as a parquet file.
 
-            # Write to Silver Layer
-            output_path = os.path.join(self.silver_dir, 'sales_pipeline_sales_silver.parquet')
-            sales_df.to_parquet(output_path, index=False)
-            logger.info(f"Successfully transformed and saved 'sales' silver data to {output_path}. Rows: {len(sales_df)}")
+    Args:
+        df (pd.DataFrame): The DataFrame to write.
+        silver_path (str): The base path to the silver layer.
+        filename (str): The name of the parquet file to write (e.g., 'sales_silver.parquet').
 
-        except FileNotFoundError:
-            logger.error("Required bronze file not found. Silver transformation aborted.")
-        except Exception as e:
-            logger.error(f"An error occurred during 'sales' silver transformation: {e}", exc_info=True)
+    Raises:
+        Exception: For errors during file writing.
+    """
+    os.makedirs(silver_path, exist_ok=True)
+    filepath = os.path.join(silver_path, filename)
+    logger.info(f"Attempting to write silver data to: {filepath}")
+    try:
+        df.to_parquet(filepath, index=False)
+        logger.info(f"Successfully wrote {len(df)} rows to silver layer at {filepath}")
+    except Exception as e:
+        logger.error(f"Error writing silver data to {filepath}: {e}")
+        raise
 
 def main() -> None:
     """
-    Main function to run the silver layer transformation.
-    Reads configuration from environment variables.
+    Main function to orchestrate the silver layer transformation.
+    Reads bronze data, cleans, masks PII, joins (if applicable), and writes silver data.
     """
-    logger.info("Starting sales_pipeline silver layer processing.")
+    logger.info("Starting sales_pipeline silver layer transformation.")
 
-    bronze_dir = os.getenv('BRONZE_LAYER_DIR', './data/bronze')
-    silver_dir = os.getenv('SILVER_LAYER_DIR', './data/silver')
+    # Configuration from environment variables
+    BRONZE_LAYER_PATH = os.getenv("BRONZE_LAYER_PATH", "data/bronze")
+    SILVER_LAYER_PATH = os.getenv("SILVER_LAYER_PATH", "data/silver")
 
-    # Ensure directories exist for output
-    os.makedirs(bronze_dir, exist_ok=True)
-    os.makedirs(silver_dir, exist_ok=True)
+    SALES_BRONZE_FILENAME = "sales.parquet"
+    SALES_SILVER_FILENAME = "sales_silver.parquet"
 
-    transformer = SilverTransformer(bronze_dir=bronze_dir, silver_dir=silver_dir)
-    transformer.transform_sales_data()
+    PII_COLUMNS = ['customer_name', 'customer_email', 'product_name']
 
-    logger.info("sales_pipeline silver layer processing finished.")
+    try:
+        # 1. Load bronze sales data
+        sales_df = load_bronze_data(BRONZE_LAYER_PATH, SALES_BRONZE_FILENAME)
+
+        # 2. Mask PII columns
+        sales_df_masked = mask_pii(sales_df, PII_COLUMNS)
+
+        # 3. Clean and transform sales data (type casting, deduplication)
+        # This function now returns a detailed, cleaned DataFrame without aggregation.
+        sales_df_silver = clean_sales_data(sales_df_masked)
+
+        # No explicit join step mentioned beyond "join sources" but only one source 'sales' is listed
+        # If multiple sources were present, this would be the place for merging/joining.
+
+        # 4. Write silver data
+        write_silver_data(sales_df_silver, SILVER_LAYER_PATH, SALES_SILVER_FILENAME)
+
+        logger.info("Sales pipeline silver layer transformation completed successfully.")
+
+    except FileNotFoundError:
+        logger.error("Skipping silver transformation due to missing bronze file.")
+    except Exception as e:
+        logger.exception(f"An error occurred during the silver layer transformation: {e}")
 
 if __name__ == "__main__":
+    # Fix for Redundant logging configuration: Ensure logging.basicConfig is called only if
+    # the root logger has not yet been configured (i.e., has no handlers).
+    # This prevents duplicate handlers if getLogger was called implicitly before basicConfig,
+    # and ensures basicConfig is effectively called only once.
+    if not logging.root.handlers:
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     main()

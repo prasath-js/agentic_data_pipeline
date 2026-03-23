@@ -1,108 +1,153 @@
 import unittest
 import pandas as pd
 from datetime import datetime
-import sys
-import os
-
-# Add the project root to the sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from src.sales_pipeline.gold import transform_gold_data, GOLD_OUTPUT_PATH, GOLD_FILE_NAME
+from src.gold.sales_pipeline_gold import aggregate_sales_data
 
 class TestGoldLayer(unittest.TestCase):
+    """
+    Unit tests for the Gold layer aggregations of the sales pipeline.
+    """
 
-    @classmethod
-    def setUpClass(cls):
-        """Set up test data for all tests."""
-        # Create a dummy silver DataFrame
-        cls.silver_df = pd.DataFrame({
-            'order_id': [1, 2, 3, 4, 5, 6],
-            'customer_id': ['C1', 'C2', 'C1', 'C3', 'C2', 'C1'],
-            'customer_name_hashed': ['hash1', 'hash2', 'hash1', 'hash3', 'hash2', 'hash1'],
-            'customer_email_hashed': ['emailhash1', 'emailhash2', 'emailhash1', 'emailhash3', 'emailhash2', 'emailhash1'],
-            'product_id': ['P1', 'P2', 'P1', 'P3', 'P2', 'P1'],
-            'product_name_hashed': ['prodhash1', 'prodhash2', 'prodhash1', 'prodhash3', 'prodhash2', 'prodhash1'],
-            'quantity': [10, 5, 20, 15, 8, 12],
-            'unit_price': [10.0, 20.0, 10.0, 5.0, 20.0, 10.0],
-            'total_amount': [100.0, 100.0, 200.0, 75.0, 160.0, 120.0],
-            'order_date': [datetime(2023, 1, 1), datetime(2023, 1, 1), datetime(2023, 1, 2),
-                           datetime(2023, 1, 2), datetime(2023, 1, 3), datetime(2023, 1, 3)],
-            'region': ['East', 'West', 'East', 'Central', 'West', 'East'],
-            'status': ['completed', 'completed', 'pending', 'completed', 'completed', 'completed']
+    def setUp(self) -> None:
+        """
+        Set up common test data for the Gold layer tests.
+        """
+        # Sample silver data reflecting the output of the silver layer
+        self.silver_data = pd.DataFrame({
+            'order_id': ['1', '2', '3', '4', '5'],
+            'customer_id': ['C1', 'C2', 'C1', 'C3', 'C2'],
+            'customer_name_masked': ['hash1', 'hash2', 'hash1', 'hash3', 'hash2'],
+            'customer_email_masked': ['hash_e1', 'hash_e2', 'hash_e1', 'hash_e3', 'hash_e2'],
+            'product_id': ['P1', 'P2', 'P1', 'P3', 'P2'],
+            'product_name_masked': ['hash_p1', 'hash_p2', 'hash_p1', 'hash_p3', 'hash_p2'],
+            'quantity': [2, 1, 3, 1, 2],
+            'unit_price': [10.0, 25.0, 10.0, 50.0, 25.0],
+            'total_amount': [20.0, 25.0, 30.0, 50.0, 50.0],
+            'order_date': [
+                datetime(2023, 1, 1).date(),
+                datetime(2023, 1, 1).date(),
+                datetime(2023, 1, 2).date(),
+                datetime(2023, 1, 1).date(),
+                datetime(2023, 1, 2).date()
+            ],
+            'region': ['East', 'West', 'East', 'South', 'West'],
+            'status': ['completed', 'pending', 'completed', 'completed', 'pending']
         })
 
-        # Ensure the output directory exists for writing files
-        os.makedirs(GOLD_OUTPUT_PATH, exist_ok=True)
+    def test_aggregate_sales_data_basic(self) -> None:
+        """
+        Test basic aggregation of sales data.
+        Verifies correct sum of total_sales and total_quantity by order_date and region.
+        """
+        aggregated_df = aggregate_sales_data(self.silver_data.copy())
 
-    def test_aggregation_logic(self):
-        """Test if the aggregation logic for total sales and quantity is correct."""
-        gold_df = transform_gold_data(self.silver_df)
+        # Expected data for 2023-01-01, East: total_amount=20.0, quantity=2
+        # Expected data for 2023-01-01, West: total_amount=25.0, quantity=1
+        # Expected data for 2023-01-01, South: total_amount=50.0, quantity=1
+        # Expected data for 2023-01-02, East: total_amount=30.0, quantity=3
+        # Expected data for 2023-01-02, West: total_amount=50.0, quantity=2
 
-        # Expected data after aggregation
-        expected_data = {
-            'order_date': [datetime(2023, 1, 1), datetime(2023, 1, 1),
-                           datetime(2023, 1, 2), datetime(2023, 1, 2),
-                           datetime(2023, 1, 3), datetime(2023, 1, 3)],
-            'region': ['East', 'West', 'Central', 'East', 'East', 'West'],
-            'total_sales': [100.0, 100.0, 75.0, 200.0, 120.0, 160.0],
-            'total_quantity_sold': [10, 5, 15, 20, 12, 8]
-        }
-        expected_df = pd.DataFrame(expected_data)
-        # Sort both dataframes for consistent comparison
-        gold_df_sorted = gold_df.sort_values(by=['order_date', 'region']).reset_index(drop=True)
-        expected_df_sorted = expected_df.sort_values(by=['order_date', 'region']).reset_index(drop=True)
+        expected_data = pd.DataFrame({
+            'order_date': [
+                datetime(2023, 1, 1).date(),
+                datetime(2023, 1, 1).date(),
+                datetime(2023, 1, 1).date(),
+                datetime(2023, 1, 2).date(),
+                datetime(2023, 1, 2).date()
+            ],
+            'region': ['East', 'South', 'West', 'East', 'West'],
+            'total_sales': [20.0, 50.0, 25.0, 30.0, 50.0],
+            'total_quantity': [2, 1, 1, 3, 2]
+        })
 
-        pd.testing.assert_frame_equal(gold_df_sorted, expected_df_sorted, check_dtype=True)
+        # Sort both dataframes to ensure consistent order for comparison
+        aggregated_df = aggregated_df.sort_values(by=['order_date', 'region']).reset_index(drop=True)
+        expected_data = expected_data.sort_values(by=['order_date', 'region']).reset_index(drop=True)
 
-    def test_output_columns(self):
-        """Test if the output DataFrame contains the correct columns."""
-        gold_df = transform_gold_data(self.silver_df)
-        expected_columns = ['order_date', 'region', 'total_sales', 'total_quantity_sold']
-        self.assertListEqual(list(gold_df.columns), expected_columns)
+        pd.testing.assert_frame_equal(aggregated_df, expected_data, check_dtype=True)
 
-    def test_empty_silver_dataframe(self):
-        """Test behavior with an empty silver DataFrame."""
-        empty_silver_df = pd.DataFrame(columns=[
-            'order_id', 'customer_id', 'customer_name_hashed', 'customer_email_hashed',
-            'product_id', 'product_name_hashed', 'quantity', 'unit_price', 'total_amount',
-            'order_date', 'region', 'status'
+    def test_aggregate_sales_data_empty_input(self) -> None:
+        """
+        Test aggregation with an empty input DataFrame.
+        Should return an empty DataFrame with the correct columns.
+        """
+        empty_df = pd.DataFrame(columns=[
+            'order_id', 'customer_id', 'customer_name_masked', 'customer_email_masked',
+            'product_id', 'product_name_masked', 'quantity', 'unit_price',
+            'total_amount', 'order_date', 'region', 'status'
         ])
-        gold_df = transform_gold_data(empty_silver_df)
-        self.assertTrue(gold_df.empty)
-        self.assertListEqual(list(gold_df.columns), ['order_date', 'region', 'total_sales', 'total_quantity_sold'])
+        aggregated_df = aggregate_sales_data(empty_df)
 
-    def test_data_types(self):
-        """Test if the data types of the output columns are correct."""
-        gold_df = transform_gold_data(self.silver_df)
-        self.assertTrue(pd.api.types.is_datetime64_any_dtype(gold_df['order_date']))
-        self.assertTrue(pd.api.types.is_string_dtype(gold_df['region']))
-        self.assertTrue(pd.api.types.is_float_dtype(gold_df['total_sales']))
-        self.assertTrue(pd.api.types.is_integer_dtype(gold_df['total_quantity_sold']))
+        expected_columns = ['order_date', 'region', 'total_sales', 'total_quantity']
+        self.assertTrue(aggregated_df.empty)
+        self.assertListEqual(list(aggregated_df.columns), expected_columns)
 
-    def test_single_row_data(self):
-        """Test with a single row in the silver DataFrame."""
-        single_row_df = pd.DataFrame({
-            'order_id': [1],
+    def test_aggregate_sales_data_single_entry(self) -> None:
+        """
+        Test aggregation with a single entry in the input DataFrame.
+        """
+        single_entry_df = pd.DataFrame({
+            'order_id': ['1'],
             'customer_id': ['C1'],
-            'customer_name_hashed': ['hash1'],
-            'customer_email_hashed': ['emailhash1'],
+            'customer_name_masked': ['hash1'],
+            'customer_email_masked': ['hash_e1'],
             'product_id': ['P1'],
-            'product_name_hashed': ['prodhash1'],
-            'quantity': [10],
+            'product_name_masked': ['hash_p1'],
+            'quantity': [5],
             'unit_price': [10.0],
-            'total_amount': [100.0],
-            'order_date': [datetime(2023, 1, 1)],
-            'region': ['East'],
+            'total_amount': [50.0],
+            'order_date': [datetime(2023, 1, 1).date()],
+            'region': ['North'],
             'status': ['completed']
         })
-        gold_df = transform_gold_data(single_row_df)
-        expected_df = pd.DataFrame({
-            'order_date': [datetime(2023, 1, 1)],
-            'region': ['East'],
-            'total_sales': [100.0],
-            'total_quantity_sold': [10]
+        aggregated_df = aggregate_sales_data(single_entry_df)
+
+        expected_data = pd.DataFrame({
+            'order_date': [datetime(2023, 1, 1).date()],
+            'region': ['North'],
+            'total_sales': [50.0],
+            'total_quantity': [5]
         })
-        pd.testing.assert_frame_equal(gold_df.reset_index(drop=True), expected_df.reset_index(drop=True), check_dtype=True)
+        pd.testing.assert_frame_equal(aggregated_df, expected_data, check_dtype=True)
+
+    def test_aggregate_sales_data_multiple_regions_same_date(self) -> None:
+        """
+        Test aggregation with multiple regions for the same order date.
+        """
+        data_multiple_regions = pd.DataFrame({
+            'order_id': ['1', '2', '3'],
+            'customer_id': ['C1', 'C2', 'C3'],
+            'customer_name_masked': ['hash1', 'hash2', 'hash3'],
+            'customer_email_masked': ['hash_e1', 'hash_e2', 'hash_e3'],
+            'product_id': ['P1', 'P2', 'P3'],
+            'product_name_masked': ['hash_p1', 'hash_p2', 'hash_p3'],
+            'quantity': [10, 5, 2],
+            'unit_price': [10.0, 20.0, 30.0],
+            'total_amount': [100.0, 100.0, 60.0],
+            'order_date': [
+                datetime(2023, 2, 1).date(),
+                datetime(2023, 2, 1).date(),
+                datetime(2023, 2, 1).date()
+            ],
+            'region': ['North', 'South', 'North'],
+            'status': ['completed', 'completed', 'pending']
+        })
+        aggregated_df = aggregate_sales_data(data_multiple_regions)
+
+        expected_data = pd.DataFrame({
+            'order_date': [
+                datetime(2023, 2, 1).date(),
+                datetime(2023, 2, 1).date()
+            ],
+            'region': ['North', 'South'],
+            'total_sales': [160.0, 100.0],
+            'total_quantity': [12, 5]
+        })
+
+        aggregated_df = aggregated_df.sort_values(by=['order_date', 'region']).reset_index(drop=True)
+        expected_data = expected_data.sort_values(by=['order_date', 'region']).reset_index(drop=True)
+
+        pd.testing.assert_frame_equal(aggregated_df, expected_data, check_dtype=True)
 
 if __name__ == '__main__':
     unittest.main()

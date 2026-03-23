@@ -1,58 +1,48 @@
-# config.yaml
-# Pipeline configuration file for sales_pipeline
-
-pipeline_name: "sales_pipeline"
-schedule: "daily"
-
-bronze_layer:
-  staging_path: "data/bronze"
-
-silver_layer:
-  staging_path: "data/silver"
-
-gold_layer:
-  output_path: "data/gold"
-  output_target:
-    type: "local_file"
-    auth_type: "none" # No authentication needed for local file output
-
 sources:
-  - name: "sales"
-    type: "csv"
-    mode: "full"
-    path: "data/raw/sales.csv" # Path to the raw CSV file
-    schema:
-      order_id: "int64"
-      customer_id: "int64"
-      customer_name: "object"
-      customer_email: "object"
-      product_id: "int64"
-      product_name: "object"
-      quantity: "int64"
-      unit_price: "float64"
-      total_amount: "float64"
-      order_date: "datetime64[ns]"
-      region: "object"
-      status: "object"
-    pii_columns:
-      - "customer_name"
-      - "customer_email"
-      - "product_name"
-    date_columns:
-      - "order_date"
+  sales:
+    type: csv
+    mode: full
+    path: data/sales.csv # This path assumes the data directory is relative to where the pipeline script runs
 
-# Example of how to define database sources if needed
-# - name: "products"
-#   type: "mysql"
-#   mode: "full"
-#   connection_string: "mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}"
-#   table: "products"
-#   user_env_var: "MYSQL_USER"
-#   password_env_var: "MYSQL_PASSWORD"
-#   host_env_var: "MYSQL_HOST"
-#   port_env_var: "MYSQL_PORT"
-#   database_env_var: "MYSQL_DATABASE"
-#   pii_columns:
-#     - "product_description"
-#   date_columns:
-#     - "created_at"
+output_target:
+  type: local_file
+  auth_type: none
+  path: data/output/gold_sales.parquet # Output path for the gold layer
+
+data_profiles:
+  sales:
+    columns:
+      - name: order_id
+        type: int
+      - name: customer_id
+        type: int
+      - name: customer_name
+        type: str
+        pii: true
+      - name: customer_email
+        type: str
+        pii: true
+      - name: product_id
+        type: int
+      - name: product_name
+        type: str
+        pii: true
+      - name: quantity
+        type: int
+      - name: unit_price
+        type: float
+      - name: total_amount
+        type: float
+      - name: order_date
+        type: datetime
+      - name: region
+        type: str
+      - name: status
+        type: str
+    primary_keys: [order_id]
+    pii_columns: [customer_name, customer_email, product_name]
+    date_columns: [order_date]
+
+pipeline_name: sales_pipeline
+schedule: daily
+staging_area: data/staging # Directory for bronze and silver parquet files

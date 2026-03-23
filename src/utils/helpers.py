@@ -1,62 +1,72 @@
 import hashlib
 import logging
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-def mask_pii(value: str) -> str:
+
+def mask_pii(value: Optional[Union[str, int]]) -> Optional[str]:
     """
-    Masks a string value using SHA-256 hashing.
+    Masks a PII value using SHA-256 hashing.
 
     Args:
-        value (str): The string value to mask.
+        value (Optional[Union[str, int]]): The PII value to mask.
 
     Returns:
-        str: The SHA-256 hash of the input value.
+        Optional[str]: The SHA-256 hash of the value if not None, otherwise None.
     """
-    if not isinstance(value, str):
-        logger.warning("Attempted to mask a non-string value. Returning original value.")
-        return value
-    return hashlib.sha256(value.encode()).hexdigest()
+    if value is None:
+        return None
+    try:
+        return hashlib.sha256(str(value).encode('utf-8')).hexdigest()
+    except (UnicodeEncodeError, TypeError) as e:
+        logger.error(f"Error masking PII value: {e}")
+        return None
+
 
 def standardize_date_column(df: pd.DataFrame, column_name: str, date_format: str = '%Y-%m-%d') -> pd.DataFrame:
     """
-    Converts a specified column in a DataFrame to datetime objects with a standard format.
+    Standardizes a date column in a DataFrame to a specified format.
 
     Args:
         df (pd.DataFrame): The input DataFrame.
-        column_name (str): The name of the column to standardize.
-        date_format (str): The desired output format for the date. Defaults to '%Y-%m-%d'.
+        column_name (str): The name of the date column to standardize.
+        date_format (str): The desired output date format (e.g., '%Y-%m-%d').
 
     Returns:
-        pd.DataFrame: The DataFrame with the specified column converted to datetime and formatted.
+        pd.DataFrame: The DataFrame with the date column standardized.
     """
     if column_name not in df.columns:
         logger.warning(f"Date column '{column_name}' not found in DataFrame. Skipping standardization.")
         return df
 
     try:
+        # Attempt to convert to datetime, coercing errors to NaT
         df[column_name] = pd.to_datetime(df[column_name], errors='coerce')
+        # Format back to string, handling NaT values
         df[column_name] = df[column_name].dt.strftime(date_format)
-        logger.info(f"Successfully standardized date column '{column_name}'.")
-    except (ValueError, TypeError) as e:
+        logger.info(f"Successfully standardized date column '{column_name}' to format '{date_format}'.")
+    except (ValueError, AttributeError, TypeError) as e:
         logger.error(f"Error standardizing date column '{column_name}': {e}")
     return df
 
-def validate_schema(df: pd.DataFrame, expected_schema: Dict[str, str]) -> bool:
+
+def validate_schema(df: pd.DataFrame, expected_schema: Dict[str, Any]) -> bool:
     """
-    Validates if the DataFrame's columns and their data types match an expected schema.
+    Validates if a DataFrame's schema matches the expected schema.
+    Checks for column presence and data types.
 
     Args:
         df (pd.DataFrame): The DataFrame to validate.
-        expected_schema (Dict[str, str]): A dictionary where keys are column names
-                                          and values are expected pandas data types (e.g., 'object', 'int64', 'float64', 'datetime64[ns]').
+        expected_schema (Dict[str, Any]): A dictionary where keys are column names
+                                          and values are expected data types (e.g., str, int, float, datetime).
 
     Returns:
-        bool: True if the DataFrame schema matches the expected schema, False otherwise.
+        bool: True if the schema matches, False otherwise.
     """
+    is_valid = True
     df_columns = set(df.columns)
     expected_columns = set(expected_schema.keys())
 
@@ -64,124 +74,126 @@ def validate_schema(df: pd.DataFrame, expected_schema: Dict[str, str]) -> bool:
     missing_columns = expected_columns - df_columns
     if missing_columns:
         logger.error(f"Schema validation failed: Missing expected columns: {missing_columns}")
-        return False
+        is_valid = False
 
-    # Check for unexpected columns (optional, depending on strictness)
-    # If you want to allow extra columns, remove this block
+    # Check for unexpected columns (optional, depends on strictness)
     unexpected_columns = df_columns - expected_columns
     if unexpected_columns:
         logger.warning(f"Schema validation warning: Unexpected columns found: {unexpected_columns}")
-        # Depending on strictness, you might return False here, but for now, it's a warning.
 
-    # Check column data types
-    for col, expected_dtype in expected_schema.items():
-        if col in df.columns: # Check again in case it was an unexpected column earlier
-            actual_dtype = str(df[col].dtype)
-            if actual_dtype != expected_dtype:
-                logger.error(f"Schema validation failed for column '{col}': "
-                             f"Expected dtype '{expected_dtype}', got '{actual_dtype}'.")
-                return False
-    
-    logger.info("Schema validation successful.")
-    return True
-
-def cast_dataframe_columns(df: pd.DataFrame, column_types: Dict[str, Any]) -> pd.DataFrame:
-    """
-    Casts specified columns in a DataFrame to the given data types.
-
-    Args:
-        df (pd.DataFrame): The input DataFrame.
-        column_types (Dict[str, Any]): A dictionary mapping column names to desired data types.
-                                        e.g., {'quantity': 'int64', 'unit_price': 'float64'}
-
-    Returns:
-        pd.DataFrame: The DataFrame with columns cast to the specified types.
-    """
-    for col, dtype in column_types.items():
+    # Check data types for common columns
+    for col, expected_type in expected_schema.items():
         if col in df.columns:
-            try:
-                # Special handling for datetime objects if 'datetime64[ns]' is specified
-                if dtype == 'datetime64[ns]':
-                    df[col] = pd.to_datetime(df[col], errors='coerce')
-                else:
-                    df[col] = df[col].astype(dtype)
-                logger.debug(f"Column '{col}' cast to type '{dtype}'.")
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Failed to cast column '{col}' to type '{dtype}': {e}. Column type remains unchanged.")
-        else:
-            logger.warning(f"Column '{col}' not found in DataFrame for type casting.")
-    return df
+            # For robustness, we check the inferred pandas dtype against a mapping
+            # This can be tricky with 'object' types that might contain mixed data
+            # A more robust check might involve sampling and checking individual values
+            # Here, we do a basic check.
+            actual_dtype = df[col].dtype
+            if pd.api.types.is_numeric_dtype(actual_dtype) and (expected_type is int or expected_type is float):
+                continue
+            elif pd.api.types.is_string_dtype(actual_dtype) and expected_type is str:
+                continue
+            elif pd.api.types.is_datetime64_any_dtype(actual_dtype) and expected_type is pd.Timestamp:
+                continue
+            elif pd.api.types.is_bool_dtype(actual_dtype) and expected_type is bool:
+                continue
+            elif (actual_dtype == object) and (expected_type is str or expected_type is Any):
+                # 'object' can be anything, often strings. This is a lenient check.
+                continue
+            else:
+                logger.error(f"Schema validation failed for column '{col}': Expected type {expected_type.__name__}, got {actual_dtype}")
+                is_valid = False
+        elif col not in missing_columns:
+            # This case should ideally not happen if missing_columns is handled above,
+            # but as a safeguard.
+            logger.error(f"Schema validation failed: Column '{col}' not found for type check.")
+            is_valid = False
+
+    if is_valid:
+        logger.info("Schema validation successful.")
+    else:
+        logger.error("Schema validation failed.")
+
+    return is_valid
+
+
+def main() -> None:
+    """
+    Main function to demonstrate helper utilities.
+    """
+    logging.basicConfig(level=logging.INFO)
+    logger.info("Demonstrating helper utilities.")
+
+    # PII Masking demonstration
+    original_name = "John Doe"
+    masked_name = mask_pii(original_name)
+    logger.info(f"Original name: {original_name}, Masked name: {masked_name}")
+
+    original_email = "john.doe@example.com"
+    masked_email = mask_pii(original_email)
+    logger.info(f"Original email: {original_email}, Masked email: {masked_email}")
+
+    # Date standardization demonstration
+    data = {
+        'order_id': [1, 2, 3],
+        'order_date_raw': ['2023-01-01', '02/Jan/2023', '2023-1-3'],
+        'sale_amount': [100.50, 200.00, 150.75]
+    }
+    df_dates = pd.DataFrame(data)
+    logger.info("\nOriginal DataFrame with raw dates:")
+    logger.info(df_dates)
+
+    df_standardized = standardize_date_column(df_dates.copy(), 'order_date_raw', '%Y-%m-%d')
+    logger.info("\nDataFrame with standardized dates:")
+    logger.info(df_standardized)
+
+    df_standardized_us = standardize_date_column(df_dates.copy(), 'order_date_raw', '%m/%d/%Y')
+    logger.info("\nDataFrame with standardized dates (MM/DD/YYYY):")
+    logger.info(df_standardized_us)
+
+    # Schema validation demonstration
+    sales_data = {
+        'order_id': [101, 102, 103],
+        'customer_id': [1, 2, 1],
+        'customer_name': ['Alice', 'Bob', 'Alice'],
+        'product_id': ['P001', 'P002', 'P001'],
+        'quantity': [2, 1, 3],
+        'total_amount': [20.0, 15.0, 30.0],
+        'order_date': ['2023-01-15', '2023-01-16', '2023-01-17']
+    }
+    df_sales = pd.DataFrame(sales_data)
+    df_sales['order_date'] = pd.to_datetime(df_sales['order_date']) # Convert to datetime for schema check
+
+    expected_sales_schema = {
+        'order_id': int,
+        'customer_id': int,
+        'customer_name': str,
+        'product_id': str,
+        'quantity': int,
+        'total_amount': float,
+        'order_date': pd.Timestamp
+    }
+
+    logger.info("\nValidating sales DataFrame against expected schema:")
+    is_valid_sales_schema = validate_schema(df_sales, expected_sales_schema)
+    logger.info(f"Sales DataFrame schema is valid: {is_valid_sales_schema}")
+
+    # Demonstrate invalid schema
+    invalid_sales_data = {
+        'order_id': ['101', '102', '103'], # Should be int, not str
+        'customer_id': [1, 2, 1],
+        'customer_name': ['Alice', 'Bob', 'Alice'],
+        'quantity': [2, 1, 3],
+        'total_amount': [20.0, 15.0, 30.0],
+        'order_date': ['2023-01-15', '2023-01-16', '2023-01-17']
+    }
+    df_invalid_sales = pd.DataFrame(invalid_sales_data)
+    df_invalid_sales['order_date'] = pd.to_datetime(df_invalid_sales['order_date'])
+
+    logger.info("\nValidating invalid sales DataFrame against expected schema (missing 'product_id', wrong 'order_id' type):")
+    is_valid_invalid_sales_schema = validate_schema(df_invalid_sales, expected_sales_schema)
+    logger.info(f"Invalid Sales DataFrame schema is valid: {is_valid_invalid_sales_schema}")
+
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    logger.info("Running helper utilities tests...")
-
-    # Test PII masking
-    test_value = "john.doe@example.com"
-    masked_value = mask_pii(test_value)
-    logger.info(f"Original: {test_value}, Masked: {masked_value}")
-    assert masked_value == hashlib.sha256(test_value.encode()).hexdigest()
-    assert mask_pii(123) == 123 # Should return original for non-strings
-    logger.info("PII masking test passed.")
-
-    # Test date standardization
-    data_dates = {'order_id': [1, 2, 3], 'order_date': ['2023-01-15', '1/16/2023', '20230117'], 'ship_date': ['01-01-2023', 'invalid', '2023-01-03']}
-    df_dates = pd.DataFrame(data_dates)
-    logger.info(f"Original DataFrame:\n{df_dates}")
-    df_dates_standardized = standardize_date_column(df_dates.copy(), 'order_date')
-    logger.info(f"Standardized 'order_date':\n{df_dates_standardized}")
-    assert df_dates_standardized['order_date'].iloc[0] == '2023-01-15'
-    assert df_dates_standardized['order_date'].iloc[1] == '2023-01-16'
-    assert df_dates_standardized['order_date'].iloc[2] == '2023-01-17'
-    df_dates_standardized_invalid = standardize_date_column(df_dates.copy(), 'invalid_column')
-    assert df_dates_standardized_invalid.equals(df_dates)
-    logger.info("Date standardization test passed.")
-
-    # Test schema validation
-    data_schema = {'col1': [1, 2, 3], 'col2': ['A', 'B', 'C'], 'col3': [1.1, 2.2, 3.3]}
-    df_schema = pd.DataFrame(data_schema)
-    logger.info(f"DataFrame for schema validation:\n{df_schema}")
-
-    expected_schema_pass = {'col1': 'int64', 'col2': 'object', 'col3': 'float64'}
-    assert validate_schema(df_schema, expected_schema_pass)
-
-    expected_schema_fail_dtype = {'col1': 'object', 'col2': 'object', 'col3': 'float64'}
-    assert not validate_schema(df_schema, expected_schema_fail_dtype)
-
-    expected_schema_fail_missing = {'col1': 'int64', 'col2': 'object', 'col4': 'str'}
-    assert not validate_schema(df_schema, expected_schema_fail_missing)
-
-    expected_schema_pass_with_extra = {'col1': 'int64', 'col2': 'object'} # df_schema has col3 which is extra
-    assert validate_schema(df_schema, expected_schema_pass_with_extra) # Should still pass with warning
-
-    logger.info("Schema validation test passed.")
-
-    # Test column type casting
-    data_cast = {
-        'int_col': ['1', '2', '3'],
-        'float_col': ['1.1', '2.2', 'invalid_float'],
-        'date_col': ['2023-01-01', '2023-01-02', 'invalid_date'],
-        'str_col': [1, 2, 3]
-    }
-    df_cast = pd.DataFrame(data_cast)
-    logger.info(f"Original DataFrame for casting:\n{df_cast.dtypes}")
-
-    column_types_to_cast = {
-        'int_col': 'int64',
-        'float_col': 'float64',
-        'date_col': 'datetime64[ns]',
-        'new_col': 'str' # Column not in DataFrame
-    }
-
-    df_cast_result = cast_dataframe_columns(df_cast.copy(), column_types_to_cast)
-    logger.info(f"DataFrame after casting:\n{df_cast_result.dtypes}")
-
-    assert str(df_cast_result['int_col'].dtype) == 'int64'
-    assert str(df_cast_result['float_col'].dtype) == 'float64'
-    assert str(df_cast_result['date_col'].dtype) == 'datetime64[ns]'
-    assert pd.isna(df_cast_result['float_col'].iloc[2]) # 'invalid_float' should be NaN
-    assert pd.isna(df_cast_result['date_col'].iloc[2]) # 'invalid_date' should be NaT
-
-    logger.info("Column type casting test passed.")
-
-    logger.info("All helper utilities tests completed.")
+    main()
