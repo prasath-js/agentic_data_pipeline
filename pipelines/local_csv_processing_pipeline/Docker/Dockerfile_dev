@@ -1,0 +1,15 @@
+# Use the base image for the development environment
+FROM base
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Copy all local files into the container at /app
+COPY . .
+
+# Install development dependencies from requirements.txt
+# This assumes requirements.txt is copied in the previous step
+RUN pip install -r requirements.txt
+
+# Command to run the main application script when the container starts
+CMD ["python", "src/main.py"]

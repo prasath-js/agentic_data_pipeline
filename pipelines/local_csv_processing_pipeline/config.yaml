@@ -1,0 +1,16 @@
+pipeline:
+  name: local_csv_processing_pipeline
+  schedule: manual
+  architecture: medallion
+sources:
+- name: local_csv_data
+  type: local_files
+  format: ''
+  mode: one-time
+  conn_secret: LOCAL_FILES_CONN
+output:
+  type: local_files
+  conn_secret: LOCAL_FILES_CONN
+pii_columns:
+- customer_name
+- email

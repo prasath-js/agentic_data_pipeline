@@ -1,0 +1,20 @@
+# Byte-code files
+*.pyc
+__pycache__/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Editor files
+.DS_Store
+
+# Credentials
+.env
+
+# Logs
+logs/*.log
+
+# Data
+data/output/
