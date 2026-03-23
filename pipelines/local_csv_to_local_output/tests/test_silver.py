@@ -1,1 +1,0 @@
-# Error generating tests/test_silver.py: 'Context variable not found: `source`.'

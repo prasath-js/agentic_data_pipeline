@@ -1,1 +1,0 @@
-# Error generating tests/test_gold.py: 'Context variable not found: `source`.'

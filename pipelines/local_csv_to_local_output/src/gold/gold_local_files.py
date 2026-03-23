@@ -1,1 +1,0 @@
-# Error generating src/gold/gold_local_files.py: 'Context variable not found: `source`.'

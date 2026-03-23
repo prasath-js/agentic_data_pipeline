@@ -1,1 +1,0 @@
-# Error generating src/quality/null_checker.py: 'Context variable not found: `source`.'
