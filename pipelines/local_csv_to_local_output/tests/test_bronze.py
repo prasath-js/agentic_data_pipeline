@@ -1,0 +1,1 @@
+# Error generating tests/test_bronze.py: 'Context variable not found: `source`.'
