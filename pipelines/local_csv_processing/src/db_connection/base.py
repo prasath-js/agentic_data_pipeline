@@ -1,52 +1,56 @@
-import abc
+from abc import ABC, abstractmethod
 import pandas as pd
-from typing import Any
+import logging
 
-class BaseConnector(abc.ABC):
+# Configure logging for this module
+logger = logging.getLogger(__name__)
+
+class BaseConnector(ABC):
     """
-    Abstract base class for all data connectors.
+    Abstract Base Class for database and data source connectors.
 
-    This class defines the interface that all specific data connectors
-    (e.g., CSV, SQL, API) must implement for reading and writing data.
+    This class defines the interface for data connectors used throughout
+    the ETL pipeline, ensuring a consistent contract for reading and writing data.
     """
 
-    @abc.abstractmethod
-    def read(self, **kwargs: Any) -> pd.DataFrame:
+    def __init__(self) -> None:
         """
-        Abstract method to read data from a source into a pandas DataFrame.
+        Initializes the BaseConnector.
+        Specific connection parameters should be handled by concrete implementations.
+        """
+        logger.debug("BaseConnector initialized.")
 
-        Implementations should handle connection details, query execution,
-        and data retrieval specific to their source type.
+    @abstractmethod
+    def read(self, **kwargs) -> pd.DataFrame:
+        """
+        Abstract method to read data from a source into a Pandas DataFrame.
+
+        Concrete implementations must provide logic to connect to a specific
+        data source and retrieve data.
 
         Args:
-            **kwargs: Arbitrary keyword arguments specific to the connector
-                      and read operation (e.g., file_path, table_name, query).
+            **kwargs: Arbitrary keyword arguments specific to the connector's read operation.
+                      Examples might include file paths, table names, queries, etc.
 
         Returns:
             pd.DataFrame: A DataFrame containing the read data.
         """
-        raise NotImplementedError
+        raise NotImplementedError("Subclasses must implement the 'read' method.")
 
-    @abc.abstractmethod
-    def write(self, df: pd.DataFrame, **kwargs: Any) -> None:
+    @abstractmethod
+    def write(self, df: pd.DataFrame, **kwargs) -> None:
         """
-        Abstract method to write a pandas DataFrame to a target destination.
+        Abstract method to write a Pandas DataFrame to a destination.
 
-        Implementations should handle connection details, data serialization,
-        and writing specific to their target type.
+        Concrete implementations must provide logic to connect to a specific
+        data destination and store the DataFrame.
 
         Args:
             df (pd.DataFrame): The DataFrame to write.
-            **kwargs: Arbitrary keyword arguments specific to the connector
-                      and write operation (e.g., file_path, table_name, if_exists).
-        """
-        raise NotImplementedError
+            **kwargs: Arbitrary keyword arguments specific to the connector's write operation.
+                      Examples might include file paths, table names, write modes, etc.
 
-    def close(self) -> None:
+        Returns:
+            None
         """
-        Optional method to close any open connections or release resources.
-
-        This method can be overridden by concrete connectors if they manage
-        persistent connections that need explicit closing.
-        """
-        pass
+        raise NotImplementedError("Subclasses must implement the 'write' method.")

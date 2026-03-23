@@ -1,74 +1,99 @@
-import pandas as pd
 import os
 import logging
-from typing import Union, Literal
-from src.db_connection.base import BaseConnector
+import pandas as pd
+from typing import Optional, Dict, Any
 
-# Configure logger for this module
+from ..base import BaseConnector
+
+# Configure logging for this module
 logger = logging.getLogger(__name__)
 
 class LocalFilesConnector(BaseConnector):
     """
-    A connector for reading from and writing to local file systems.
-    Supports CSV, Parquet, and JSON file formats.
+    A connector for interacting with local files (CSV, Parquet, JSON).
+
+    This class provides methods to read from and write to various local file formats,
+    extending the BaseConnector for a unified interface.
     """
 
-    def read(self, file_path: str, file_format: Literal["csv", "parquet", "json"]) -> pd.DataFrame:
+    def __init__(self) -> None:
+        """
+        Initializes the LocalFilesConnector.
+        No specific connection parameters are needed for local file operations,
+        but BaseConnector requires an __init__.
+        """
+        super().__init__()
+        logger.info("LocalFilesConnector initialized.")
+
+    def _get_read_function(self, file_format: str):
+        """Internal helper to map file formats to pandas read functions."""
+        read_functions = {
+            "csv": pd.read_csv,
+            "parquet": pd.read_parquet,
+            "json": pd.read_json,
+        }
+        if file_format not in read_functions:
+            raise ValueError(f"Unsupported read file format: {file_format}. Supported formats are {list(read_functions.keys())}")
+        return read_functions[file_format]
+
+    def _get_write_function(self, file_format: str):
+        """Internal helper to map file formats to pandas write functions."""
+        write_functions = {
+            "csv": lambda df, path, **kwargs: df.to_csv(path, index=False, **kwargs),
+            "parquet": lambda df, path, **kwargs: df.to_parquet(path, index=False, **kwargs),
+            "json": lambda df, path, **kwargs: df.to_json(path, orient="records", lines=True, **kwargs),
+        }
+        if file_format not in write_functions:
+            raise ValueError(f"Unsupported write file format: {file_format}. Supported formats are {list(write_functions.keys())}")
+        return write_functions[file_format]
+
+    def read(self, file_path: str, file_format: str, **kwargs: Any) -> pd.DataFrame:
         """
         Reads data from a local file into a Pandas DataFrame.
 
         Args:
-            file_path (str): The path to the local file.
-            file_format (Literal["csv", "parquet", "json"]): The format of the file.
+            file_path (str): The full path to the local file.
+            file_format (str): The format of the file ('csv', 'parquet', 'json').
+            **kwargs (Any): Additional keyword arguments to pass to the pandas read function.
 
         Returns:
-            pd.DataFrame: A Pandas DataFrame containing the data from the file.
+            pd.DataFrame: A DataFrame containing the data from the file.
 
         Raises:
             FileNotFoundError: If the specified file does not exist.
-            ValueError: If an unsupported file format is provided.
-            Exception: For other errors during file reading.
+            ValueError: If an unsupported file format is provided or other read errors occur.
         """
-        logger.info(f"Attempting to read data from {file_path} with format {file_format}.")
+        logger.info(f"Attempting to read data from local file: {file_path} (format: {file_format})")
         try:
-            if not os.path.exists(file_path):
-                raise FileNotFoundError(f"File not found at path: {file_path}")
-
-            if file_format == "csv":
-                df = pd.read_csv(file_path)
-            elif file_format == "parquet":
-                df = pd.read_parquet(file_path)
-            elif file_format == "json":
-                df = pd.read_json(file_path)
-            else:
-                raise ValueError(f"Unsupported file format: {file_format}. Supported formats are 'csv', 'parquet', 'json'.")
-
+            read_func = self._get_read_function(file_format.lower())
+            df = read_func(file_path, **kwargs)
             logger.info(f"Successfully read {len(df)} rows from {file_path}.")
             return df
         except FileNotFoundError as e:
-            logger.error(f"File not found error when reading from {file_path}: {e}")
+            logger.error(f"File not found at {file_path}: {e}")
             raise
         except ValueError as e:
-            logger.error(f"Configuration error when reading from {file_path}: {e}")
+            logger.error(f"Error with file format or arguments for {file_path}: {e}")
             raise
         except Exception as e:
             logger.error(f"An unexpected error occurred while reading from {file_path}: {e}")
             raise
 
-    def write(self, df: pd.DataFrame, file_path: str, file_format: Literal["csv", "parquet", "json"]) -> None:
+    def write(self, df: pd.DataFrame, file_path: str, file_format: str, **kwargs: Any) -> None:
         """
         Writes a Pandas DataFrame to a local file.
 
         Args:
             df (pd.DataFrame): The DataFrame to write.
-            file_path (str): The path where the file will be written.
-            file_format (Literal["csv", "parquet", "json"]): The format to write the file in.
+            file_path (str): The full path where the file should be written.
+            file_format (str): The desired format for the file ('csv', 'parquet', 'json').
+            **kwargs (Any): Additional keyword arguments to pass to the pandas write function.
 
         Raises:
-            ValueError: If an unsupported file format is provided.
-            Exception: For other errors during file writing.
+            IOError: If there's an issue writing the file.
+            ValueError: If an unsupported file format is provided or other write errors occur.
         """
-        logger.info(f"Attempting to write {len(df)} rows to {file_path} with format {file_format}.")
+        logger.info(f"Attempting to write {len(df)} rows to local file: {file_path} (format: {file_format})")
         try:
             # Ensure the directory exists
             output_dir = os.path.dirname(file_path)
@@ -76,19 +101,30 @@ class LocalFilesConnector(BaseConnector):
                 os.makedirs(output_dir, exist_ok=True)
                 logger.debug(f"Created directory: {output_dir}")
 
-            if file_format == "csv":
-                df.to_csv(file_path, index=False)
-            elif file_format == "parquet":
-                df.to_parquet(file_path, index=False)
-            elif file_format == "json":
-                df.to_json(file_path, orient="records", indent=4)
-            else:
-                raise ValueError(f"Unsupported file format: {file_format}. Supported formats are 'csv', 'parquet', 'json'.")
-
+            write_func = self._get_write_function(file_format.lower())
+            write_func(df, file_path, **kwargs)
             logger.info(f"Successfully wrote data to {file_path}.")
         except ValueError as e:
-            logger.error(f"Configuration error when writing to {file_path}: {e}")
+            logger.error(f"Error with file format or arguments for {file_path}: {e}")
+            raise
+        except IOError as e:
+            logger.error(f"IO Error writing to {file_path}: {e}")
             raise
         except Exception as e:
             logger.error(f"An unexpected error occurred while writing to {file_path}: {e}")
             raise
+
+    def connect(self) -> Optional[Any]:
+        """
+        Establishes a connection (if applicable) for the connector.
+        For local files, this operation is generally a no-op as files are opened/closed per access.
+        """
+        logger.debug("LocalFilesConnector: No explicit connection established for local file operations.")
+        return None
+
+    def disconnect(self) -> None:
+        """
+        Closes any open connection (if applicable) for the connector.
+        For local files, this operation is generally a no-op.
+        """
+        logger.debug("LocalFilesConnector: No explicit disconnection needed for local file operations.")

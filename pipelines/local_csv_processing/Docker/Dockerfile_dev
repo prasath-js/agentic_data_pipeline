@@ -1,15 +1,15 @@
-# Dockerfile_dev
-# Extends Dockerfile_base for development purposes.
-
-FROM base_etl_pipeline:latest
+# Use the base image for development
+FROM etl_pipeline_base:latest
 
 # Set the working directory inside the container
 WORKDIR /app
 
 # Copy the entire project into the container
-# This includes source code, tests, docs, configs, etc.
 COPY . .
 
-# Command to run the main ETL pipeline script
-# This will be the default command when the container starts
+# Install development-specific dependencies from requirements.txt
+# This ensures all dependencies are present, including those for testing and local development
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Command to run the main pipeline script when the container starts
 CMD ["python", "src/main.py"]

@@ -1,150 +1,154 @@
-import pytest
 import pandas as pd
+import pytest
+from datetime import datetime
+import numpy as np
+
+# Adjust import path based on the project structure
 from src.silver.transform_silver import transform_silver
-from unittest.mock import patch, MagicMock
+from src.utils.pii_masker import mask_dataframe_columns # Used for setup/validation
 
 
 @pytest.fixture
-def sample_bronze_data_local_csv():
+def sample_bronze_data() -> pd.DataFrame:
     """
-    Fixture to provide sample bronze data for local_csv_input.
-    Includes cases for:
-    - Valid data
-    - Invalid date format
-    - Null values in critical columns
-    - Invalid amount (<= 0)
+    Fixture to provide a sample bronze DataFrame for testing.
+    Includes data for PII masking, date conversion, nulls, and invalid rows.
     """
     data = {
-        "opportunity_id": ["OPP001", "OPP002", "OPP003", "OPP004", "OPP005", "OPP006"],
-        "account_id": ["ACC001", "ACC002", "ACC003", "ACC004", "ACC005", "ACC006"],
-        "value": [1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0],
-        "close_date": ["2023-01-15", "1/2/2023", "2023-03-01", "2023-04-01", "2023-05-01", "2023-06-01"],
-        "stage": ["Closed Won", "Open", "Closed Lost", "Open", "Closed Won", "Open"],
-        "transaction_id": ["TXN001", "TXN002", "TXN003", "TXN004", "TXN005", "TXN006"],
-        "customer_id": ["CUST001", "CUST002", "CUST003", "CUST004", "CUST005", "CUST006"],
-        "quantity": [10, 20, 30, 40, 50, 60],
-        "amount": [100.0, 200.0, 0.0, 400.0, -50.0, None],  # 0.0, -50.0 are invalid, None will be dropped
-        "transaction_date": ["2022-12-01", "12/15/2022", "2023-01-01", "2023-02-01", "2023-03-01", "2023-04-01"],
+        "order_id": [1, 2, 3, 4, 5, 6, 7, 8],
+        "customer_id": [101, 102, 103, 104, 105, 106, 107, None],  # Null customer_id for testing
+        "customer_name": ["Alice Smith", "Bob Johnson", "Charlie Brown", "David Green", "Eve White", "Frank Black", "Grace Hall", "Hannah Grey"],
+        "email": ["alice@example.com", "bob@example.com", "charlie@example.com", "david@example.com", "eve@example.com", "frank@example.com", "grace@example.com", "hannah@example.com"],
+        "amount": [100.50, 200.75, -50.00, 300.20, 150.00, 0.00, 250.00, 400.00], # Negative/zero amount for filtering
+        "status": ["completed", "pending", "returned", "shipped", "invalid", "completed", "pending", "completed"], # Invalid status for filtering
+        "region": ["North", "South", "East", "West", "North", "South", "East", "West"],
+        "order_date": ["01/01/2023", "15/02/2023", "10/03/2023", "20/04/2023", "05/05/2023", "12/06/2023", "25/07/2023", "30/08/2023"] # DD/MM/YYYY format
     }
     df = pd.DataFrame(data)
-    # Introduce a row with null critical ID for testing null removal
-    df.loc[6] = ["OPP007", None, 7000.0, "2023-07-01", "Open", "TXN007", "CUST007", 70, 700.0, "2023-05-01"]
-    df.loc[7] = [None, "ACC008", 8000.0, "2023-08-01", "Open", "TXN008", "CUST008", 80, 800.0, "2023-06-01"]
-    return {"local_csv_input": df}
+    # Introduce a null order_id to test null removal
+    df.loc[2, 'order_id'] = None
+    return df
 
 
-@patch("src.silver.transform_silver.logger", new_callable=MagicMock)
-def test_date_conversion(mock_logger, sample_bronze_data_local_csv):
+def test_pii_masking(sample_bronze_data: pd.DataFrame) -> None:
     """
-    Test that date columns are correctly converted to ISO (YYYY-MM-DD) format.
+    Tests that PII columns 'customer_name' and 'email' are masked.
     """
-    bronze_data = sample_bronze_data_local_csv
-    silver_df = transform_silver(bronze_data)["local_csv_input"]
+    bronze_dataframes = {"input_csv_folder": sample_bronze_data}
+    silver_df = transform_silver(bronze_dataframes)
 
-    # Check specific converted dates
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP001", "close_date"].iloc[0] == "2023-01-15"
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP002", "close_date"].iloc[0] == "2023-01-02"
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP001", "transaction_date"].iloc[0] == "2022-12-01"
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP002", "transaction_date"].iloc[0] == "2022-12-15"
-
-    # Ensure all date columns are strings and in YYYY-MM-DD format
-    for col in ["close_date", "transaction_date"]:
-        assert silver_df[col].dtype == "object"
-        assert all(silver_df[col].str.match(r"^\d{4}-\d{2}-\d{2}$").dropna())
+    expected_mask_value = "***MASKED***"
+    assert (silver_df["customer_name"] == expected_mask_value).all()
+    assert (silver_df["email"] == expected_mask_value).all()
 
 
-@patch("src.silver.transform_silver.logger", new_callable=MagicMock)
-def test_null_removal(mock_logger, sample_bronze_data_local_csv):
+def test_date_conversion(sample_bronze_data: pd.DataFrame) -> None:
     """
-    Test that rows with nulls in critical columns (opportunity_id, account_id) are removed.
+    Tests that 'order_date' column is converted from DD/MM/YYYY to YYYY-MM-DD.
+    The transformation should convert it to datetime objects, which can then be formatted.
     """
-    bronze_data = sample_bronze_data_local_csv
-    silver_df = transform_silver(bronze_data)["local_csv_input"]
+    bronze_dataframes = {"input_csv_folder": sample_bronze_data}
+    silver_df = transform_silver(bronze_dataframes)
 
-    # Original data had 8 rows + 2 null ID rows = 10 rows.
-    # OPP003 (amount=0), OPP005 (amount=-50), OPP006 (amount=None) should be removed.
-    # OPP007 (account_id=None), OPP008 (opportunity_id=None) should be removed.
-    # Expected rows: OPP001, OPP002, OPP004 = 3 rows.
-    assert len(silver_df) == 3
-    assert "OPP007" not in silver_df["opportunity_id"].values
-    assert "OPP008" not in silver_df["opportunity_id"].values
-    assert not silver_df["opportunity_id"].isnull().any()
-    assert not silver_df["account_id"].isnull().any()
+    # Filter out rows that might have been dropped due to other transformations
+    # and ensure 'order_date' is still present.
+    # The original row 2 was dropped due to null order_id.
+    # Rows with amount <=0 (3, 5) or invalid status (4) will also be dropped.
+    # The original row 7 (index 7) with None customer_id will also be dropped.
+    # So, we expect rows 0, 1, 6
+    expected_dates = ["2023-01-01", "2023-02-15", "2023-07-25"]
+    
+    # After transformation, order_date should be datetime objects
+    assert pd.api.types.is_datetime64_any_dtype(silver_df['order_date'])
+
+    # Convert to string for direct comparison with expected YYYY-MM-DD format
+    actual_dates_str = silver_df['order_date'].dt.strftime('%Y-%m-%d').tolist()
+
+    assert actual_dates_str == expected_dates
 
 
-@patch("src.silver.transform_silver.logger", new_callable=MagicMock)
-def test_invalid_row_filtering(mock_logger, sample_bronze_data_local_csv):
+def test_null_removal(sample_bronze_data: pd.DataFrame) -> None:
     """
-    Test that rows with amount <= 0 or amount is null are removed.
+    Tests that rows with null values in critical columns ('order_id', 'customer_id') are removed.
     """
-    bronze_data = sample_bronze_data_local_csv
-    silver_df = transform_silver(bronze_data)["local_csv_input"]
+    bronze_dataframes = {"input_csv_folder": sample_bronze_data}
+    silver_df = transform_silver(bronze_dataframes)
 
-    # Rows with amount 0.0, -50.0, None should be filtered out.
-    # These correspond to OPP003, OPP005, OPP006.
-    assert "OPP003" not in silver_df["opportunity_id"].values
-    assert "OPP005" not in silver_df["opportunity_id"].values
-    assert "OPP006" not in silver_df["opportunity_id"].values
-    assert all(silver_df["amount"] > 0)
-    assert not silver_df["amount"].isnull().any()
+    # Original sample_bronze_data:
+    # Row 2 has order_id = None
+    # Row 7 has customer_id = None
+    # These two rows should be removed due to nulls in critical columns.
+    # Also, rows 3, 5 (amount <= 0) and 4 (invalid status) will be removed later.
+    # So, the final DataFrame should not contain any of these original rows.
+
+    # Check that 'order_id' and 'customer_id' columns have no nulls
+    assert silver_df["order_id"].isnull().sum() == 0
+    assert silver_df["customer_id"].isnull().sum() == 0
+
+    # Ensure the specific rows that *had* nulls are not in the final DataFrame
+    # Original order_id for row 2 was 3, for row 7 was 8. These should not be present.
+    assert 3 not in silver_df["order_id"].values
+    assert 8 not in silver_df["order_id"].values # Row 7's order_id was 8
 
 
-@patch("src.silver.transform_silver.logger", new_callable=MagicMock)
-def test_pii_masking_no_op(mock_logger, sample_bronze_data_local_csv):
+def test_invalid_row_filtering(sample_bronze_data: pd.DataFrame) -> None:
     """
-    Test that no PII masking occurs since PII_COLUMNS_TO_MASK is empty.
+    Tests that invalid rows (amount <= 0 or invalid status) are filtered out.
     """
-    bronze_data = sample_bronze_data_local_csv
-    silver_df = transform_silver(bronze_data)["local_csv_input"]
+    bronze_dataframes = {"input_csv_folder": sample_bronze_data}
+    silver_df = transform_silver(bronze_dataframes)
 
-    # Since PII_COLUMNS_TO_MASK is empty, no column should be masked.
-    # We can check a column like 'customer_id' or 'transaction_id' to ensure it's unchanged
-    # for a row that passed all other filters.
-    original_customer_id_opp001 = sample_bronze_data_local_csv["local_csv_input"].loc[0, "customer_id"]
-    original_transaction_id_opp001 = sample_bronze_data_local_csv["local_csv_input"].loc[0, "transaction_id"]
+    # Original sample_bronze_data (after null removal):
+    # Rows with amount <= 0:
+    #   - order_id 3 (index 2, but already removed by nulls)
+    #   - order_id 5 (index 4) - amount is 150.00 - NOT THIS ONE
+    #   - order_id 6 (index 5) - amount is 0.00
+    #
+    # Rows with invalid status:
+    #   - order_id 3 (index 2, but already removed by nulls) - status 'returned' (valid for example logic)
+    #   - order_id 5 (index 4) - status 'invalid'
+    #   - order_id 6 (index 5) - status 'completed' (valid)
 
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP001", "customer_id"].iloc[0] == original_customer_id_opp001
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP001", "transaction_id"].iloc[0] == original_transaction_id_opp001
+    # Based on the sample data and expected transformations:
+    # Original IDs: [1, 2, 3, 4, 5, 6, 7, 8]
+    # Removed due to nulls: 3 (order_id=None), 8 (customer_id=None)
+    # Remaining IDs: [1, 2, 4, 5, 6, 7]
+
+    # From remaining:
+    # ID 1: amount=100.50, status=completed -> KEEP
+    # ID 2: amount=200.75, status=pending -> KEEP
+    # ID 4: amount=300.20, status=shipped -> KEEP
+    # ID 5: amount=150.00, status=invalid -> REMOVE (invalid status)
+    # ID 6: amount=0.00, status=completed -> REMOVE (amount <= 0)
+    # ID 7: amount=250.00, status=pending -> KEEP
+
+    # Expected order_ids in the final silver_df: [1, 2, 4, 7]
+    expected_order_ids = {1, 2, 4, 7}
+    actual_order_ids = set(silver_df["order_id"].values)
+
+    assert actual_order_ids == expected_order_ids
+    assert len(silver_df) == 4 # Total expected rows
 
 
-@patch("src.silver.transform_silver.logger", new_callable=MagicMock)
-def test_overall_transformation(mock_logger, sample_bronze_data_local_csv):
+def test_output_dataframe_structure(sample_bronze_data: pd.DataFrame) -> None:
     """
-    Test the combined effect of all silver layer transformations.
-    Expected output should only contain valid, transformed rows.
+    Tests that the output DataFrame contains expected columns and appropriate data types.
     """
-    bronze_data = sample_bronze_data_local_csv
-    silver_result = transform_silver(bronze_data)
-    silver_df = silver_result["local_csv_input"]
+    bronze_dataframes = {"input_csv_folder": sample_bronze_data}
+    silver_df = transform_silver(bronze_dataframes)
 
-    # Expected rows after all filters:
-    # OPP001: Valid, amount > 0, date ISO
-    # OPP002: Valid, amount > 0, date non-ISO -> ISO
-    # OPP003: Invalid amount (0) -> removed
-    # OPP004: Valid, amount > 0, date ISO
-    # OPP005: Invalid amount (<0) -> removed
-    # OPP006: Invalid amount (None) -> removed
-    # OPP007: Null account_id -> removed
-    # OPP008: Null opportunity_id -> removed
+    expected_columns = [
+        "order_id", "customer_id", "customer_name", "email",
+        "amount", "status", "region", "order_date"
+    ]
+    assert list(silver_df.columns) == expected_columns
 
-    # So, only OPP001, OPP002, OPP004 should remain.
-    expected_opportunity_ids = {"OPP001", "OPP002", "OPP004"}
-    assert set(silver_df["opportunity_id"].values) == expected_opportunity_ids
-    assert len(silver_df) == 3
-
-    # Check date formats for remaining rows
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP001", "close_date"].iloc[0] == "2023-01-15"
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP002", "close_date"].iloc[0] == "2023-01-02"
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP004", "close_date"].iloc[0] == "2023-04-01"
-
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP001", "transaction_date"].iloc[0] == "2022-12-01"
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP002", "transaction_date"].iloc[0] == "2022-12-15"
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP004", "transaction_date"].iloc[0] == "2023-02-01"
-
-    # Check amounts for remaining rows
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP001", "amount"].iloc[0] == 100.0
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP002", "amount"].iloc[0] == 200.0
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP004", "amount"].iloc[0] == 400.0
-
-    # Ensure no PII masking occurred
-    assert silver_df.loc[silver_df["opportunity_id"] == "OPP001", "customer_id"].iloc[0] == "CUST001"
+    # Check data types for key columns
+    assert pd.api.types.is_integer_dtype(silver_df['order_id']) or pd.api.types.is_int64_dtype(silver_df['order_id'])
+    assert pd.api.types.is_integer_dtype(silver_df['customer_id']) or pd.api.types.is_int64_dtype(silver_df['customer_id'])
+    assert pd.api.types.is_string_dtype(silver_df['customer_name'])
+    assert pd.api.types.is_string_dtype(silver_df['email'])
+    assert pd.api.types.is_float_dtype(silver_df['amount'])
+    assert pd.api.types.is_string_dtype(silver_df['status'])
+    assert pd.api.types.is_string_dtype(silver_df['region'])
+    assert pd.api.types.is_datetime64_any_dtype(silver_df['order_date'])

@@ -5,29 +5,44 @@ __pycache__/
 *.pyd
 *.pyo
 *.egg-info/
-.pytest_cache/
+.eggs/
 
 # Environments
 .env
 .venv/
 venv/
 env/
+# virtualenv created in current directory
+.direnv/
 
-# Logs
-logs/*.log
+# Editor files
+.vscode/
+.idea/
 
-# Data
-data/output/
-
-# OS generated files
+# OS files
 .DS_Store
-.Trashes
 Thumbs.db
 
-# MyPy cache
+# Logs and data
+logs/*.log
+data/output/
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Jupyter Notebook files
+.ipynb_checkpoints/
+
+# MyPy
 .mypy_cache/
 
-# dist
-dist/
-build/
+# Docker
+.dockerignore
+
+# Misc
+*.bak
+*.swp
+*~
 ```

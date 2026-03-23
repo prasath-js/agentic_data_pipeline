@@ -1,129 +1,120 @@
 import pytest
 import pandas as pd
+from unittest.mock import MagicMock, patch
 import os
-import logging
-from src.bronze.ingest_local_csv_input import ingest
 
-# Fixture to capture log messages during tests
-@pytest.fixture(autouse=True)
-def cap_base_logging(caplog):
-    """Fixture to capture log messages during tests."""
-    with caplog.at_level(logging.INFO):
-        yield
+# Assuming the ingest function for 'input_csv_folder' is named 'ingest_data'
+# and is located in src/bronze/ingest_input_csv_folder.py
+from src.bronze.ingest_input_csv_folder import ingest_data
 
-def test_ingest_local_csv_input_success(tmp_path, monkeypatch):
+# Define mock data for successful ingestion
+@pytest.fixture
+def sample_csv_data() -> pd.DataFrame:
     """
-    Test successful ingestion of a local CSV file.
+    Returns sample data for a CSV file, matching the specified columns and a non-ISO date format.
     """
-    # Define mock CSV content with all expected columns
-    csv_content = """opportunity_id,account_id,value,close_date,stage,transaction_id,customer_id,quantity,amount,transaction_date
-1,101,1000.50,2023-01-15,Prospecting,T1,C1,10,100.00,2023-01-01
-2,102,2000.75,2023-02-20,Closed Won,T2,C2,20,200.00,2023-01-02
-3,103,500.00,2023-03-25,Negotiation,T3,C3,5,50.00,2023-01-03
-"""
-    mock_csv_path = tmp_path / "mock_local_csv_input.csv"
-    mock_csv_path.write_text(csv_content)
+    return pd.DataFrame({
+        "order_id": [1, 2, 3],
+        "customer_id": ["C101", "C102", "C103"],
+        "customer_name": ["Alice Smith", "Bob Johnson", "Charlie Brown"],
+        "email": ["alice.s@example.com", "bob.j@example.com", "charlie.b@example.com"],
+        "amount": [100.50, 200.00, 75.25],
+        "status": ["Completed", "Pending", "Cancelled"],
+        "region": ["East", "West", "North"],
+        "order_date": ["01/01/2023", "15/02/2023", "30/03/2023"] # Non-ISO DD/MM/YYYY format
+    })
 
-    # Mock the environment variable that points to the CSV file
-    monkeypatch.setenv("LOCAL_CSV_INPUT_PATH", str(mock_csv_path))
+def test_ingest_input_csv_folder_success(sample_csv_data: pd.DataFrame) -> None:
+    """
+    Tests successful ingestion of data from local CSV files.
+    Mocks the LocalFilesConnector to return predefined sample data.
+    """
+    mock_connector = MagicMock()
+    mock_connector.read_data.return_value = sample_csv_data
 
-    # Define expected columns
+    mock_builder = MagicMock()
+    mock_builder.get_connector.return_value = mock_connector
+
+    # Patch ConnectionBuilder to return our mock builder instance
+    with patch('src.db_connection.builder.ConnectionBuilder', return_value=mock_builder):
+        df_ingested = ingest_data()
+
+        # Assert that get_connector was called with expected arguments
+        mock_builder.get_connector.assert_called_once_with("local_files", "input_csv_folder")
+        # Assert that read_data was called on the connector
+        mock_connector.read_data.assert_called_once()
+
+        # Assert the ingested DataFrame matches the sample data
+        pd.testing.assert_frame_equal(df_ingested, sample_csv_data)
+        assert not df_ingested.empty
+        assert len(df_ingested) == 3
+        expected_columns = [
+            "order_id", "customer_id", "customer_name", "email",
+            "amount", "status", "region", "order_date"
+        ]
+        assert list(df_ingested.columns) == expected_columns
+
+def test_ingest_input_csv_folder_file_not_found() -> None:
+    """
+    Tests error handling when the source CSV file(s) are not found.
+    Mocks the LocalFilesConnector to raise FileNotFoundError.
+    """
+    mock_connector = MagicMock()
+    mock_connector.read_data.side_effect = FileNotFoundError("Mock: CSV file(s) not found.")
+
+    mock_builder = MagicMock()
+    mock_builder.get_connector.return_value = mock_connector
+
+    with patch('src.db_connection.builder.ConnectionBuilder', return_value=mock_builder):
+        with pytest.raises(FileNotFoundError, match="CSV file\\(s\\) not found"):
+            ingest_data()
+
+        # Assert that get_connector was called
+        mock_builder.get_connector.assert_called_once_with("local_files", "input_csv_folder")
+        # Assert that read_data was called
+        mock_connector.read_data.assert_called_once()
+
+def test_ingest_input_csv_folder_empty_data() -> None:
+    """
+    Tests ingestion when the source contains no data (e.g., empty CSV or no files matched).
+    Mocks the LocalFilesConnector to return an empty DataFrame with expected columns.
+    """
+    # Define expected columns for an empty DataFrame
     expected_columns = [
-        "opportunity_id", "account_id", "value", "close_date", "stage",
-        "transaction_id", "customer_id", "quantity", "amount", "transaction_date"
+        "order_id", "customer_id", "customer_name", "email",
+        "amount", "status", "region", "order_date"
     ]
+    mock_connector = MagicMock()
+    mock_connector.read_data.return_value = pd.DataFrame(columns=expected_columns)
 
-    # Call the ingest function
-    df = ingest()
+    mock_builder = MagicMock()
+    mock_builder.get_connector.return_value = mock_connector
 
-    # Assertions
-    assert isinstance(df, pd.DataFrame)
-    assert not df.empty, "DataFrame should not be empty for successful ingestion."
-    assert len(df) == 3, "DataFrame should have 3 rows."
-    assert all(col in df.columns for col in expected_columns), "All expected columns should be present."
-    assert df["opportunity_id"].iloc[0] == 1
-    assert df["value"].iloc[1] == 2000.75
-    assert df["stage"].iloc[2] == "Negotiation"
+    with patch('src.db_connection.builder.ConnectionBuilder', return_value=mock_builder):
+        df_ingested = ingest_data()
 
-def test_ingest_local_csv_input_file_not_found(monkeypatch, caplog):
+        mock_builder.get_connector.assert_called_once_with("local_files", "input_csv_folder")
+        mock_connector.read_data.assert_called_once()
+
+        assert df_ingested.empty
+        assert len(df_ingested) == 0
+        # Check if columns are preserved even if DataFrame is empty
+        assert list(df_ingested.columns) == expected_columns
+
+def test_ingest_input_csv_folder_general_exception() -> None:
     """
-    Test handling of FileNotFoundError during CSV ingestion when the file does not exist.
+    Tests error handling for a general exception during ingestion (e.g., parsing error, permissions).
+    Mocks the LocalFilesConnector to raise a generic Exception.
     """
-    non_existent_path = "/path/to/non_existent_local_csv_input.csv"
-    monkeypatch.setenv("LOCAL_CSV_INPUT_PATH", non_existent_path)
+    mock_connector = MagicMock()
+    mock_connector.read_data.side_effect = Exception("Mock: Generic ingestion error occurred.")
 
-    # Call the ingest function
-    df = ingest()
+    mock_builder = MagicMock()
+    mock_builder.get_connector.return_value = mock_connector
 
-    # Assertions
-    assert isinstance(df, pd.DataFrame)
-    assert df.empty, "DataFrame should be empty when file is not found."
-    assert f"File not found at: {non_existent_path}" in caplog.text
-    assert "Returning an empty DataFrame." in caplog.text
+    with patch('src.db_connection.builder.ConnectionBuilder', return_value=mock_builder):
+        with pytest.raises(Exception, match="Generic ingestion error occurred"):
+            ingest_data()
 
-def test_ingest_local_csv_input_empty_file(tmp_path, monkeypatch):
-    """
-    Test ingestion of an empty CSV file (only headers).
-    """
-    # Create an empty mock CSV file with just headers
-    csv_content = """opportunity_id,account_id,value,close_date,stage,transaction_id,customer_id,quantity,amount,transaction_date
-"""
-    mock_csv_path = tmp_path / "empty_local_csv_input.csv"
-    mock_csv_path.write_text(csv_content)
-
-    monkeypatch.setenv("LOCAL_CSV_INPUT_PATH", str(mock_csv_path))
-
-    expected_columns = [
-        "opportunity_id", "account_id", "value", "close_date", "stage",
-        "transaction_id", "customer_id", "quantity", "amount", "transaction_date"
-    ]
-
-    # Call the ingest function
-    df = ingest()
-
-    # Assertions
-    assert isinstance(df, pd.DataFrame)
-    assert df.empty, "DataFrame should be empty if the CSV contains only headers."
-    assert all(col in df.columns for col in expected_columns), "Headers should still be parsed correctly."
-    assert "successfully ingested, 0 rows found." in caplog.text
-
-def test_ingest_local_csv_input_missing_env_var(monkeypatch, caplog):
-    """
-    Test handling when the environment variable for the file path is not set.
-    """
-    # Ensure the environment variable is not set
-    monkeypatch.delenv("LOCAL_CSV_INPUT_PATH", raising=False)
-
-    # Call the ingest function
-    df = ingest()
-
-    # Assertions
-    assert isinstance(df, pd.DataFrame)
-    assert df.empty, "DataFrame should be empty when environment variable is missing."
-    assert "Environment variable 'LOCAL_CSV_INPUT_PATH' not set." in caplog.text
-    assert "Returning an empty DataFrame." in caplog.text
-
-def test_ingest_local_csv_input_malformed_csv(tmp_path, monkeypatch, caplog):
-    """
-    Test handling of a malformed CSV file.
-    """
-    malformed_csv_content = """opportunity_id,account_id,value
-1,101
-2,102,2000.75,extra_value
-""" # Row 2 has too many columns
-    mock_csv_path = tmp_path / "malformed_local_csv_input.csv"
-    mock_csv_path.write_text(malformed_csv_content)
-
-    monkeypatch.setenv("LOCAL_CSV_INPUT_PATH", str(mock_csv_path))
-
-    # Call the ingest function
-    df = ingest()
-
-    # Assertions
-    assert isinstance(df, pd.DataFrame)
-    # Pandas read_csv is robust, it might parse it with NaNs or raise a parser error.
-    # We expect it to log an error and potentially return a partial or empty DF depending on error handling.
-    # For this test, we expect it to try to read and log an issue.
-    assert not df.empty # Pandas might still parse the first valid row
-    assert len(df) == 2 # Pandas might parse the first two rows, with issues in the second
-    assert "Error reading CSV file" in caplog.text # Check for general error logging
+        mock_builder.get_connector.assert_called_once_with("local_files", "input_csv_folder")
+        mock_connector.read_data.assert_called_once()

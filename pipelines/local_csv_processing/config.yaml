@@ -3,12 +3,14 @@ pipeline:
   schedule: manual
   architecture: medallion
 sources:
-- name: local_csv_input
+- name: input_csv_folder
   type: local_files
   format: ''
-  mode: one_time
+  mode: batch
   conn_secret: LOCAL_FILES_CONN
 output:
   type: local_files
   conn_secret: LOCAL_FILES_CONN
-pii_columns: []
+pii_columns:
+- customer_name
+- email

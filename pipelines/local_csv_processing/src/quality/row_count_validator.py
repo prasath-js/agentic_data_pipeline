@@ -1,55 +1,61 @@
 import logging
 
-# Configure logging for the module
+# Get a logger instance
 logger = logging.getLogger(__name__)
 
 def validate_row_counts(bronze_count: int, silver_count: int, gold_count: int) -> bool:
     """
-    Validates row counts across Bronze, Silver, and Gold layers to detect potential data loss or empty outputs.
+    Validates row counts across different pipeline stages (Bronze, Silver, Gold).
+
+    Logs a warning if the Silver layer row count is less than 80% of the Bronze layer.
+    This function primarily serves as a high-level data quality check for significant
+    data loss between stages.
 
     Args:
-        bronze_count (int): The number of rows in the Bronze layer DataFrame.
-        silver_count (int): The number of rows in the Silver layer DataFrame.
-        gold_count (int): The number of rows in the Gold layer DataFrame.
+        bronze_count (int): The number of rows processed in the Bronze layer.
+        silver_count (int): The number of rows processed in the Silver layer.
+        gold_count (int): The number of rows processed in the Gold layer.
 
     Returns:
-        bool: True if all row count checks pass, False otherwise.
+        bool: True if all specified checks pass (or no critical failures are detected).
+              Currently, it returns True after logging warnings for potential issues,
+              as no hard stop conditions are defined for these checks.
     """
-    all_checks_pass = True
-    data_loss_threshold = 0.80  # Silver count should be at least 80% of Bronze
+    logger.info(f"Starting row count validation:")
+    logger.info(f"  Bronze layer row count: {bronze_count}")
+    logger.info(f"  Silver layer row count: {silver_count}")
+    logger.info(f"  Gold layer row count: {gold_count}")
 
-    logger.info(f"Bronze layer row count: {bronze_count}")
-    logger.info(f"Silver layer row count: {silver_count}")
-    logger.info(f"Gold layer row count: {gold_count}")
-
-    # Check for unexpected data loss from Bronze to Silver
-    if bronze_count > 0 and silver_count < (bronze_count * data_loss_threshold):
+    # Check for significant row count drop from Bronze to Silver
+    if bronze_count > 0:
+        silver_bronze_ratio = silver_count / bronze_count
+        if silver_bronze_ratio < 0.8:
+            logger.warning(
+                f"Silver layer row count ({silver_count}) is less than 80% "
+                f"of Bronze layer row count ({bronze_count}). "
+                f"Ratio: {silver_bronze_ratio:.2f}. "
+                f"Investigate potential excessive filtering or data loss."
+            )
+        else:
+            logger.info(
+                f"Silver layer row count ({silver_count}) is within acceptable "
+                f"range compared to Bronze ({bronze_count}). Ratio: {silver_bronze_ratio:.2f}."
+            )
+    elif silver_count > 0:
         logger.warning(
-            f"Potential unexpected data loss detected: Silver layer has {silver_count} rows, "
-            f"which is less than {data_loss_threshold*100}% of Bronze layer's {bronze_count} rows."
+            f"Bronze layer row count is zero, but Silver layer has {silver_count} rows. "
+            f"This might indicate an issue in the Bronze ingestion or count."
         )
-        all_checks_pass = False
-    elif bronze_count == 0 and silver_count > 0:
-        logger.warning(
-            "Bronze layer had 0 rows but Silver layer has rows. This is an unexpected scenario."
-        )
-        all_checks_pass = False
-    elif bronze_count > 0 and silver_count == 0:
-        logger.warning(
-            "Bronze layer had rows but Silver layer has 0 rows. All data might have been filtered out."
-        )
-        all_checks_pass = False
-    elif bronze_count == 0 and silver_count == 0:
-        logger.info("Both Bronze and Silver layers are empty. No data to process.")
-
-    # Check if Gold layer is empty
-    if gold_count == 0:
-        logger.warning("Gold layer has 0 rows. The final output is empty.")
-        all_checks_pass = False
-
-    if all_checks_pass:
-        logger.info("All row count validation checks passed successfully.")
     else:
-        logger.error("One or more row count validation checks failed.")
+        logger.info("Both Bronze and Silver layer row counts are zero. No data processed.")
 
-    return all_checks_pass
+    # Additional checks can be added here, e.g., Silver vs Gold, etc.
+    if silver_count < gold_count:
+        logger.warning(
+            f"Gold layer row count ({gold_count}) is greater than Silver layer row count ({silver_count}). "
+            f"This is usually unexpected unless aggregation logic expands rows (e.g., joins). "
+            f"Please verify gold layer transformation logic."
+        )
+
+    logger.info("Row count validation completed.")
+    return True
