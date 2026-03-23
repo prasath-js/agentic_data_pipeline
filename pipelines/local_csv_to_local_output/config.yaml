@@ -1,6 +1,6 @@
 pipeline:
   name: local_csv_to_local_output
-  schedule: manual
+  schedule: 0 0 * * *
   architecture: medallion
 sources:
 - name: local_csv_input
@@ -11,4 +11,6 @@ sources:
 output:
   type: local_files
   conn_secret: LOCAL_FILES_CONN
-pii_columns: []
+pii_columns:
+- customer_name
+- email

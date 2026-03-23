@@ -1,151 +1,148 @@
 {
   "pipeline": "local_csv_to_local_output",
-  "created_at": "2026-03-20T10:53:00.692563+00:00",
+  "created_at": "2026-03-23T07:07:49.746726+00:00",
   "generated_by": "agentic-pipeline v1.0",
   "discovery": {
     "local_csv_input": {
       "source_name": "local_csv_input",
-      "row_count": 2000,
-      "column_count": 10,
+      "row_count": 10,
+      "column_count": 8,
       "columns": {
-        "opportunity_id": {
+        "order_id": {
           "dtype": "str",
-          "null_count": 1110,
-          "null_rate": 0.555,
-          "distinct_count": 3,
+          "null_count": 0,
+          "null_rate": 0.0,
+          "distinct_count": 10,
           "top_values": {
-            "OPP001": 321,
-            "OPP002": 316,
-            "OPP003": 253
+            "ORD001": 1,
+            "ORD002": 1,
+            "ORD003": 1,
+            "ORD004": 1,
+            "ORD005": 1
           }
-        },
-        "account_id": {
-          "dtype": "str",
-          "null_count": 1099,
-          "null_rate": 0.5495,
-          "distinct_count": 3,
-          "top_values": {
-            "ACC002": 323,
-            "ACC055": 301,
-            "ACC001": 277
-          }
-        },
-        "value": {
-          "dtype": "float64",
-          "null_count": 1079,
-          "null_rate": 0.5395,
-          "min": -855.9911,
-          "max": 119772.3837,
-          "avg": 58199.6066
-        },
-        "close_date": {
-          "dtype": "str",
-          "null_count": 1083,
-          "null_rate": 0.5415,
-          "distinct_count": 1,
-          "top_values": {
-            "2024-07-15": 917
-          },
-          "date_format": "ISO (YYYY-MM-DD)"
-        },
-        "stage": {
-          "dtype": "str",
-          "null_count": 1104,
-          "null_rate": 0.552,
-          "distinct_count": 3,
-          "top_values": {
-            "Closed Won": 313,
-            "Negotiation": 312,
-            "Proposal": 271
-          }
-        },
-        "transaction_id": {
-          "dtype": "float64",
-          "null_count": 1108,
-          "null_rate": 0.554,
-          "min": 101.0097,
-          "max": 103.9993,
-          "avg": 102.4903
         },
         "customer_id": {
-          "dtype": "float64",
-          "null_count": 1102,
-          "null_rate": 0.551,
-          "min": 1.47,
-          "max": 109.8188,
-          "avg": 55.2991
-        },
-        "quantity": {
-          "dtype": "float64",
-          "null_count": 1094,
-          "null_rate": 0.547,
-          "min": -0.996,
-          "max": 4.9974,
-          "avg": 2.0071
-        },
-        "amount": {
           "dtype": "str",
-          "null_count": 1092,
-          "null_rate": 0.546,
-          "distinct_count": 3,
+          "null_count": 0,
+          "null_rate": 0.0,
+          "distinct_count": 6,
           "top_values": {
-            "$10.00": 325,
-            "$25.50": 293,
-            "$199.99": 290
+            "CUST001": 3,
+            "CUST002": 2,
+            "CUST003": 2,
+            "CUST004": 1,
+            "CUST005": 1
           }
         },
-        "transaction_date": {
+        "customer_name": {
           "dtype": "str",
-          "null_count": 1100,
-          "null_rate": 0.55,
+          "null_count": 0,
+          "null_rate": 0.0,
+          "distinct_count": 6,
+          "top_values": {
+            "John Doe": 3,
+            "Jane Smith": 2,
+            "Bob Johnson": 2,
+            "Alice Brown": 1,
+            "Charlie Wilson": 1
+          }
+        },
+        "email": {
+          "dtype": "str",
+          "null_count": 0,
+          "null_rate": 0.0,
+          "distinct_count": 6,
+          "top_values": {
+            "john@example.com": 3,
+            "jane@example.com": 2,
+            "bob@example.com": 2,
+            "alice@example.com": 1,
+            "charlie@example.com": 1
+          }
+        },
+        "amount": {
+          "dtype": "float64",
+          "null_count": 0,
+          "null_rate": 0.0,
+          "min": 0.0,
+          "max": 450.0,
+          "avg": 210.55
+        },
+        "status": {
+          "dtype": "str",
+          "null_count": 0,
+          "null_rate": 0.0,
+          "distinct_count": 5,
+          "top_values": {
+            "delivered": 4,
+            "pending": 2,
+            "shipped": 2,
+            "cancelled": 1,
+            "failed": 1
+          }
+        },
+        "region": {
+          "dtype": "str",
+          "null_count": 0,
+          "null_rate": 0.0,
           "distinct_count": 4,
           "top_values": {
-            "2023-02-05": 244,
-            "2023-02-06": 227,
-            "2023-02-04": 226,
-            "2023-02-03": 203
+            "North": 4,
+            "South": 2,
+            "East": 2,
+            "West": 2
+          }
+        },
+        "order_date": {
+          "dtype": "str",
+          "null_count": 0,
+          "null_rate": 0.0,
+          "distinct_count": 10,
+          "top_values": {
+            "15/01/2025": 1,
+            "20/01/2025": 1,
+            "25/01/2025": 1,
+            "01/02/2025": 1,
+            "05/02/2025": 1
           },
-          "date_format": "ISO (YYYY-MM-DD)"
+          "date_format": "DD/MM/YYYY"
         }
       },
-      "pii_detected": [],
+      "pii_detected": [
+        "customer_name",
+        "email"
+      ],
       "incremental_col": null,
       "sample_rows": [
         {
-          "opportunity_id": "OPP003",
-          "account_id": "ACC001",
-          "value": NaN,
-          "close_date": "2024-07-15",
-          "stage": "Negotiation",
-          "transaction_id": NaN,
-          "customer_id": NaN,
-          "quantity": NaN,
-          "amount": NaN,
-          "transaction_date": NaN
+          "order_id": "ORD001",
+          "customer_id": "CUST001",
+          "customer_name": "***MASKED***",
+          "email": "***MASKED***",
+          "amount": 150.0,
+          "status": "delivered",
+          "region": "North",
+          "order_date": "15/01/2025"
         },
         {
-          "opportunity_id": "OPP003",
-          "account_id": NaN,
-          "value": 70226.0069918024,
-          "close_date": NaN,
-          "stage": "Closed Won",
-          "transaction_id": NaN,
-          "customer_id": NaN,
-          "quantity": NaN,
-          "amount": NaN,
-          "transaction_date": NaN
+          "order_id": "ORD002",
+          "customer_id": "CUST002",
+          "customer_name": "***MASKED***",
+          "email": "***MASKED***",
+          "amount": 250.5,
+          "status": "pending",
+          "region": "South",
+          "order_date": "20/01/2025"
         },
         {
-          "opportunity_id": NaN,
-          "account_id": "ACC055",
-          "value": 98406.14649454968,
-          "close_date": "2024-07-15",
-          "stage": "Negotiation",
-          "transaction_id": NaN,
-          "customer_id": NaN,
-          "quantity": NaN,
-          "amount": NaN,
-          "transaction_date": NaN
+          "order_id": "ORD003",
+          "customer_id": "CUST003",
+          "customer_name": "***MASKED***",
+          "email": "***MASKED***",
+          "amount": 75.0,
+          "status": "shipped",
+          "region": "East",
+          "order_date": "25/01/2025"
         }
       ]
     }
@@ -153,7 +150,8 @@
   "relationship": {
     "join_keys": [],
     "conflicts": [
-      "Non-ISO date format detected: {'local_csv_input': 'ISO (YYYY-MM-DD)'}"
+      "Non-ISO date format detected: {'local_csv_input': 'DD/MM/YYYY'}",
+      "PII detected in local_csv_input: ['customer_name', 'email'] \u2014 will be masked in Silver"
     ]
   },
   "plan": {
@@ -169,42 +167,47 @@
       ],
       "silver": [
         {
-          "name": "clean_and_standardize_data",
+          "name": "transform_and_clean_data",
           "transforms": [
-            "clean_data_types",
+            "mask_pii",
             "fix_date_formats"
           ]
         }
       ],
       "gold": [
         {
-          "name": "prepare_final_sales_report",
+          "name": "aggregate_sales_data",
           "aggregations": [
-            "prepare_final_dataset"
+            "group_by_region",
+            "calculate_total_amount_per_region"
           ]
         }
       ]
     },
-    "pii_columns": [],
+    "join_strategy": {},
+    "pii_columns": [
+      "customer_name",
+      "email"
+    ],
     "date_fixes": [
-      "close_date",
-      "transaction_date"
+      {
+        "column": "order_date",
+        "format": "DD/MM/YYYY"
+      }
     ],
     "output_target": {
       "type": "local_files",
       "path": "output/"
     },
-    "schedule": "manual"
+    "schedule": "0 0 * * *"
   },
   "last_run": {
-    "timestamp": "2026-03-20T10:53:00.692563+00:00",
+    "timestamp": "2026-03-23T07:07:49.746726+00:00",
     "status": "failed",
     "test_results": {
-      "status": "unknown",
-      "passed": 0,
-      "failed": 0,
-      "total": 0,
-      "credential_check": "passed"
+      "status": "failed",
+      "credential_check": "passed",
+      "code_review": "failed"
     },
     "pr_url": null
   }
